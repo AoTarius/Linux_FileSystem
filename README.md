@@ -14,7 +14,16 @@ A user-space ext2-like file system simulator written in C. It uses a single regu
 ### 编译 / Build
 
 ```bash
-gcc -o output/ext2fs main.c init.c
+make           # 编译
+make run       # 编译并运行
+make debug     # Debug 模式编译（-g -O0）
+make clean     # 清理编译产物（obj/ + output/）
+make distclean # 清理编译产物 + 虚拟磁盘（./Ext2），彻底重置
+```
+
+> **注意**：`make clean` 只删二进制文件，不会动 `./Ext2`（虚拟磁盘）。
+> 你在 shell 中创建的所有文件和目录都持久化在 `./Ext2` 里。
+> 想从头开始，执行 `make distclean && make && make run`。
 ```
 
 ### 运行 / Run
@@ -106,44 +115,59 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 
 ```
 .
-├── main.h          # 公共函数声明 / Public declarations
-├── main.c          # 入口、命令解析、交互循环 / Entry point, command parser
-├── init.h          # 常量、结构体、静态变量、内部声明 / Constants, structs, internals
-├── init.c          # 核心文件系统实现 / Core implementation
-├── output/         # 编译输出目录 / Build output
-│   └── ext2fs      # 编译后的二进制 / Compiled binary
-└── README.md       # 本文件 / This file
+├── include/                    # 公共头文件
+│   ├── ext2_types.h            # 数据结构 (super_block, inode, dir_entry...)
+│   ├── ext2_constants.h        # 磁盘布局常量
+│   ├── fs_context.h            # 全局上下文 & 生命周期 API
+│   ├── disk_io.h               # 层 0: 磁盘物理 I/O
+│   ├── bitmap.h                # 层 1: 位图分配 / 回收
+│   ├── directory.h             # 层 2: 目录项操作
+│   ├── file_ops.h              # 层 2: 文件操作
+│   └── main.h                  # 公共命令接口 (供 shell 使用)
+├── src/                        # 源文件
+│   ├── main.c                  # 入口 (20 行)
+│   ├── shell.c                 # 交互循环 & 命令解析 (66 行)
+│   ├── context.c               # ctx 所有者 & 生命周期 (216 行)
+│   ├── disk_io.c               # 层 0: 磁盘 I/O (131 行)
+│   ├── bitmap.c                # 层 1: 位图管理 (111 行)
+│   ├── directory.c             # 层 2: 目录操作 (181 行)
+│   └── file_ops.c              # 层 2-3: 文件操作 & 删除 (350 行)
+├── output/                     # 编译输出目录
+│   └── ext2fs                  # 编译后的二进制 (~52 KB)
+├── Makefile                    # 构建系统
+└── README.md                   # 本文件
 ```
 
 ## 发现的问题 / Issues Found
 
-### 已修复的关键 Bug / Fixed Critical Bugs
+### ✅ 已修复 (Phase 1-3 重构中解决)
 
-| # | 位置 | 问题 |
-|---|------|------|
-| 1 | `init.c:remove_inode()` | ~~删除 inode 时错误地清除了 block 位图 (`bitbuf`) 而非 inode 位图 (`ibuf`)，导致 block 位图损坏~~ → **已修复** |
-| 2 | `init.c:search_file()` | ~~后置 `++` 导致 off-by-one：当文件在 `fopen_table[15]` 时返回"未找到"~~ → **已修复** |
-| 3 | `init.c:del()` | ~~`inode_area[i]` 数组越界访问 — `inode_area` 大小仅为 1，`i` 是 inode 号，读取垃圾内存~~ → **已修复** |
-| 4 | `init.c:read_file()` | ~~`i_size > 512` 时读取超出 `Buffer` 边界~~ → **已修复** |
+| # | 问题 | 修复方式 |
+|---|------|----------|
+| 1 | 删除 inode 时错误清除 block 位图 | **已修复** |
+| 2 | `fopen_table[15]` 时 off-by-one 返回"未找到" | **已修复** |
+| 3 | `inode_area[i]` 数组越界访问 | **已修复** |
+| 4 | `i_size > 512` 时读取超出 `Buffer` 边界 | **已修复** |
+| 5 | 文件句柄泄漏：`update_*` 函数重复 `fopen` 无 `fclose` | **Phase 2 修复** — `fp` 在 `fs_init()` 中打开一次，`fs_shutdown()` 关闭 |
+| 6 | 首次运行 crash：`Ext2` 不存在时 `fp` 处于关闭状态 | **Phase 2 修复** — `initialize_memory` 在 `fs_mkfs` 后正确重新打开 `fp` |
+| 7 | 26 个编译警告（static 函数声明在头文件中） | **Phase 1 修复** — static 函数声明移除，编译 0 warning |
+| 8 | 无 Makefile | **Phase 1 修复** |
+| 9 | `main.c` 末尾 147 行死代码 | **Phase 1 移除** |
+| 10 | 中文注释 GBK 编码 | **已修复为 UTF-8** |
+| 11 | `sleep()` 函数声明但无实现 | **Phase 3 移除**（不再声明） |
 
 ### 仍存在的问题 / Remaining Issues
 
-| # | 严重程度 | 问题 |
-|---|----------|------|
-| 1 | **高** | 所有 `scanf("%s",...)` 无缓冲区大小限制 — 输入过长会导致**栈溢出** |
-| 2 | **高** | `fflush(stdin)` 是 C 标准的**未定义行为**，跨平台兼容性差 |
-| 3 | **中** | `rmdir()` 递归删除时直接覆盖 `current_path` 和 `current_dir`，导致路径损坏 |
-| 4 | **中** | `update_*`/`reload_*` 系列函数重复 `fopen` 而不 `fclose`，导致**文件句柄泄漏** |
-| 5 | **低** | `cat()` 函数名有误导性 — 实际是创建文件 (`touch`)，不是显示内容 |
-| 6 | **低** | `help` 命令已声明但未实现，主循环也未注册 |
-| 7 | **低** | `sleep()` 函数已声明但无实现 |
-| 8 | **低** | `main.c` 末尾注释掉的代码中，`close` 命令错误地调用了 `open_file()` (copy-paste 错误) |
-| 9 | **低** | 所有静态函数声明放在头文件中，导致每个 `.c` 文件各有一份拷贝，并产生大量 compiler warning |
-| 10 | **低** | 不支持多级路径 (`mkdir /a/b` 无效) |
-| 11 | **低** | `write` 以 `#` 作为输入结束符，文件内容不能包含 `#` |
-| 12 | **低** | `current_path` 格式不规范 (`[root@ /` 缺少 `]`) |
-| 13 | **低** | 无 Makefile |
-| 14 | ~~低~~ ✅ | ~~中文注释为 GBK 编码，非中文环境显示乱码~~ → 已修复为 UTF-8 中文 |
+| # | 严重程度 | 位置 | 问题 |
+|---|----------|------|------|
+| 1 | **高** | `shell.c` | 所有 `scanf("%s",...)` 无缓冲区大小限制 — 输入过长会导致**栈溢出** |
+| 2 | **高** | `shell.c` / `file_ops.c` | `fflush(stdin)` 是 C 标准的**未定义行为** |
+| 3 | **中** | `file_ops.c:rmdir()` | 递归删除时覆盖 `current_path` / `current_dir`，导致非空目录删除失败 |
+| 4 | **低** | `main.h` | `cat()` 实际语义是 `touch`（创建文件），函数名有误导性 |
+| 5 | **低** | — | `help` 命令已声明但未实现 |
+| 6 | **低** | — | 不支持多级路径 (`mkdir /a/b` 无效) |
+| 7 | **低** | `file_ops.c:file_write()` | 以 `#` 作为输入结束符，文件内容不能包含 `#` |
+| 8 | **低** | `context.c` | `current_path` 格式不规范 (`[root@ /` 末尾缺 `]`) |
 
 ## 后续开发计划 / Development Roadmap
 
@@ -151,42 +175,42 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 
 | 优先级 | 任务 | 说明 | 涉及文件 | 工作量 |
 |--------|------|------|----------|--------|
-| 🔴 P0 | **login 用户登录系统** | 设计用户数据结构（uid、用户名、密码哈希），实现登录认证、会话管理，与 inode 的 `i_uid`/`i_gid` 联动 | `main.c`、新建 `user.c/.h` | 大 |
-| 🔴 P0 | **用户信息持久化** | 在磁盘上模拟 `/etc/passwd` 和 `/etc/shadow`，格式化和初始化时创建默认 root 用户 | `init.c`、新建 `user.c` | 中 |
-| 🟡 P1 | **ls 列出物理地址** | `ls()` 输出增加一列，显示文件数据块在磁盘上的块号（`inode.i_block[]`） | `init.c:ls()` | 小 |
-| 🟡 P1 | **时间戳更新** | 引入 `<time.h>`，在 `read_file` 时更新 `i_atime`，在 `write_file`/`cat`/`mkdir` 时更新 `i_mtime`/`i_ctime` | `init.c` | 小 |
-| 🟠 P2 | **间接块寻址** | `i_block[8]` → `i_block[15]`（12 直接 + 1 间接 + 1 双间接 + 1 三间接），重构 `alloc_block`、`read_file`、`write_file`、`del` 的块寻址逻辑 | `init.h`、`init.c` | 大 |
-| 🟠 P2 | **超级块添加空闲计数** | `super_block` 增加 `sb_free_blocks_count` 和 `sb_free_inodes_count` 字段 | `init.h`、`init.c` | 小 |
+| 🔴 P0 | **login 用户登录系统** | 设计用户数据结构，实现登录认证、会话管理，与 inode 的 `i_uid`/`i_gid` 联动 | `shell.c`、新建 `src/user.c`、`include/user.h` | 大 |
+| 🔴 P0 | **用户信息持久化** | 在磁盘上模拟 `/etc/passwd` 和 `/etc/shadow`，初始化时创建默认 root 用户 | `context.c`、新建 `src/user.c` | 中 |
+| 🟡 P1 | **ls 列出物理地址** | `ls()` 输出增加一列，显示文件数据块在磁盘上的块号 | `directory.c:dir_list()` | 小 |
+| 🟡 P1 | **时间戳更新** | 引入 `<time.h>`，在读写/创建时更新 `i_atime`/`i_mtime`/`i_ctime` | `file_ops.c`、`directory.c` | 小 |
+| 🟠 P2 | **间接块寻址** | `i_block[8]` → `i_block[15]`（12 直接 + 1 间接 + 1 双间接 + 1 三间接） | `ext2_types.h`、`bitmap.c`、`file_ops.c` | 大 |
+| 🟠 P2 | **超级块添加空闲计数** | `super_block` 增加 `sb_free_blocks_count` / `sb_free_inodes_count` | `ext2_types.h`、`context.c` | 小 |
 
-### 第二阶段：补全 ext2 固有功能（真实 ext2 有但当前未实现）
+### 第二阶段：补全 ext2 固有功能
 
-| 任务 | 说明 | 工作量 |
-|------|------|--------|
-| **多块组支持** | 当前仅 1 个块组。需支持多个块组，每组有独立的 GDT 副本和位图，超级块在每个块组有备份 | 大 |
-| **完整权限系统** | 当前 `i_mode` 仅用低 3 位（rwx），应在 login 基础上实现 user/group/other 三级权限（`rwxrwxrwx` 共 9 位），`open_file` 时检查执行权限 | 中 |
-| **硬链接** | `i_links_count` 字段已定义但未使用。实现 `ln` 命令，删除时仅在计数归零时释放 inode | 中 |
-| **chmod / chown 命令** | 修改文件的权限位和所有者，需与 login 用户系统联动 | 中 |
-| **绝对路径 & 多级路径** | 支持 `mkdir /home/user/docs`、`cd /home`、`ls /` 等绝对路径和嵌套路径操作 | 中 |
-| **文件追加写模式** | 当前 `write` 为覆盖写，增加 `>>` 追加模式（类似 `echo xxx >> file`） | 小 |
-| **cp / mv 命令** | 文件复制和移动（跨目录） | 中 |
-| **目录项变长支持** | `dir_entry.rec_len` 字段已定义但使用固定 16B。利用 `rec_len` 支持变长文件名（>8 字符）和目录项删除时的空间合并 | 中 |
-| **卷标读写** | `super_block.sb_volume_name` 和 `group_desc.bg_volume_name` 已定义，增加 `volname` 命令读/写卷标 | 小 |
-| **根保留块** | ext2 允许为 root 保留一定比例的数据块，防止普通用户占满磁盘 | 小 |
+| 任务 | 说明 | 涉及文件 | 工作量 |
+|------|------|----------|--------|
+| **多块组支持** | 当前仅 1 个块组，需支持多块组（独立 GDT 副本和位图） | `ext2_types.h`、`disk_io.c`、`context.c` | 大 |
+| **完整权限系统** | `i_mode` 实现 user/group/other 三级 `rwxrwxrwx` 共 9 位 | `file_ops.c`、`directory.c` | 中 |
+| **硬链接** | `i_links_count` 字段已定义未使用，实现 `ln` 命令 | `file_ops.c`、`directory.c` | 中 |
+| **chmod / chown 命令** | 修改文件的权限位和所有者 | `file_ops.c` | 中 |
+| **绝对路径 & 多级路径** | 支持 `mkdir /home/user/docs`、`cd /home` 等 | `directory.c` | 中 |
+| **文件追加写模式** | `write` 增加 `>>` 追加模式 | `file_ops.c:file_write()` | 小 |
+| **cp / mv 命令** | 文件复制和移动（跨目录） | `file_ops.c` | 中 |
+| **目录项变长支持** | 利用 `rec_len` 支持变长文件名（>8 字符） | `ext2_types.h`、`directory.c` | 中 |
+| **卷标读写** | 增加 `volname` 命令读/写卷标 | `context.c` | 小 |
 
 ### 第三阶段：体验与健壮性改进
 
-| 任务 | 说明 | 工作量 |
-|------|------|--------|
-| **Makefile** | 编写 `Makefile`，支持 `make` / `make clean` / `make debug` | 小 |
-| **输入安全** | 所有 `scanf("%s")` 改为 `fgets` + 边界检查，消除栈溢出风险 | 中 |
-| **`fflush(stdin)` 替换** | 用 `while(getchar()!='\n')` 或平台兼容方式清空输入缓冲 | 小 |
-| **文件句柄管理** | `update_*`/`reload_*` 函数改为使用全局 `fp` 而非重复 `fopen`，关闭时统一 `fclose` | 中 |
-| **错误码返回** | 所有函数返回值规范化，`fread`/`fwrite`/`fseek` 添加错误检查 | 中 |
-| **`help` 命令实现** | 补全 `help()` 函数体，列出所有命令及用法 | 小 |
-| **`cat` 重命名为 `touch`** | 当前 `cat` 实际语义是 `touch`（创建文件），应修正命名 | 小 |
-| **提示符格式修正** | `[root@ /` → `[root@ /]#` 或 `root@fs:/#` | 小 |
-| **write 结束符可配置** | `#` 改为 `Ctrl+D`（EOF）或 `.` 单行结束，避免文件内容受限 | 小 |
-| **中文编码统一 UTF-8** | ✅ 已完成（本次修复） | — |
+| 任务 | 说明 | 涉及文件 | 工作量 |
+|------|------|----------|--------|
+| ✅ **Makefile** | 支持 `make` / `make clean` / `make debug` / `make run` | `Makefile` | ✅ 已完成 |
+| ✅ **文件句柄管理** | `fp` 统一由 `fs_init` 打开、`fs_shutdown` 关闭 | `context.c`、`disk_io.c` | ✅ 已完成 |
+| ✅ **代码模块化** | 1070 行巨石拆分为 7 个模块，依赖单向无环 | 全部 `src/` | ✅ 已完成 |
+| ✅ **编译零警告** | 26 warnings → 0 | — | ✅ 已完成 |
+| **输入安全** | `scanf("%s")` → `fgets` + 边界检查 | `shell.c` | 中 |
+| **`fflush(stdin)` 替换** | 平台兼容方式清空输入缓冲 | `shell.c`、`file_ops.c` | 小 |
+| **错误码返回** | `fread`/`fwrite`/`fseek` 添加错误检查 | `disk_io.c` | 中 |
+| **`help` 命令实现** | 补全 `help()` 函数体 | `shell.c` | 小 |
+| **`cat` → `touch` 重命名** | 函数名反映实际语义 | `main.h`、`file_ops.c`、`shell.c` | 小 |
+| **提示符格式修正** | `[root@ /` → `[root@ /]#` | `context.c` | 小 |
+| **write 结束符可配置** | `#` → `Ctrl+D` (EOF) | `file_ops.c` | 小 |
 
 ### 第四阶段：扩展功能（加分项 / 兴趣探索）
 
