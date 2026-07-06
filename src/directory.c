@@ -95,11 +95,37 @@ int file_is_open(unsigned short ino)
 
 /* ---- 列目录 (ls) ---- */
 
+/*
+ * 格式化数据块号字符串，用于"物理地址"列显示。
+ * 无数据块（i_blocks==0）时输出 "----"；
+ * 有数据块时输出逗号分隔的绝对磁盘块号。
+ */
+static void format_block_str(char *out, int maxlen,
+                             const unsigned short *blocks,
+                             unsigned short count)
+{
+    unsigned short b;
+    if (count == 0) {
+        strcpy(out, "----");
+        return;
+    }
+    out[0] = '\0';
+    for (b = 0; b < count; b++) {
+        char num[8];
+        /* 绝对磁盘块号 = DATA_BLOCK/BLOCK_SIZE + 相对索引 */
+        sprintf(num, "%s%u", b > 0 ? "," : "",
+                (unsigned)(blocks[b] + DATA_BLOCK / BLOCK_SIZE));
+        strncat(out, num, maxlen - strlen(out) - 1);
+    }
+}
+
 void dir_list(void)
 {
     unsigned short i, j, k, type_flag;
+    char block_str[32];
+    int blk_len;
 
-    printf("items          type           mode           size\n");
+    printf("items          type           mode           blocks             size\n");
     inode_read(ctx.current_dir);
     for (i = 0; i < ctx.inode_cache.i_blocks; i++) {
         dir_read(ctx.inode_cache.i_block[i]);
@@ -131,6 +157,15 @@ void dir_list(void)
                     case 6: printf("r_w__"); break;
                     case 7: printf("r_w_x"); break;
                 }
+                /* ---- 物理地址列 ---- */
+                format_block_str(block_str, sizeof(block_str),
+                                 ctx.inode_cache.i_block,
+                                 ctx.inode_cache.i_blocks);
+                blk_len = (int)strlen(block_str);
+                j = 0;
+                while (j++ < 18 - blk_len) printf(" ");
+                printf("%s", block_str);
+
                 if (type_flag != 2)
                     printf("          ----");
                 else
@@ -149,6 +184,15 @@ void dir_list(void)
                     case 6: printf("r_w__"); break;
                     case 7: printf("r_w_x"); break;
                 }
+                /* ---- 物理地址列 ---- */
+                format_block_str(block_str, sizeof(block_str),
+                                 ctx.inode_cache.i_block,
+                                 ctx.inode_cache.i_blocks);
+                blk_len = (int)strlen(block_str);
+                j = 0;
+                while (j++ < 18 - blk_len) printf(" ");
+                printf("%s", block_str);
+
                 printf("          %4ld bytes", ctx.inode_cache.i_size);
             }
             printf("\n");

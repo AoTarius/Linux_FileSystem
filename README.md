@@ -24,7 +24,7 @@ make distclean # 清理编译产物 + 虚拟磁盘（./Ext2），彻底重置
 > **注意**：`make clean` 只删二进制文件，不会动 `./Ext2`（虚拟磁盘）。
 > 你在 shell 中创建的所有文件和目录都持久化在 `./Ext2` 里。
 > 想从头开始，执行 `make distclean && make && make run`。
-```
+
 
 ### 运行 / Run
 
@@ -49,7 +49,7 @@ Welcome, root!
 [root@/]#
 ```
 > root (uid=0) 提示符以 `#` 结尾，普通用户以 `$` 结尾，与 Linux 一致。
-```
+
 
 ## 命令列表 / Commands
 
@@ -87,10 +87,10 @@ Hello World!
 [root@/docs/]# close readme.txt
 File readme.txt closed!
 [root@/docs/]# ls
-items          type           mode           size
-.              <DIR>          r_w_x          ----
-..             <DIR>          r_w_x          ----
-readme.txt     <FILE>         r_w__          12 bytes
+items          type           mode           blocks             size
+.              <DIR>          r_w_x               525          ----
+..             <DIR>          r_w_x               524          ----
+readme.txt     <FILE>         r_w__               526            12 bytes
 [root@/docs/]# cd ..
 [root@/]# whoami
 User: root  (uid=0, gid=0)
@@ -195,7 +195,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 |--------|------|------|----------|--------|
 | ~~🔴 P0~~ | ~~**login 用户登录系统**~~ | ~~设计用户数据结构，实现登录认证、会话管理，与 inode 的 `i_uid`/`i_gid` 联动~~ ✅ 已完成 | `shell.c`、`src/user.c`、`include/user.h` | 大 |
 | ~~🔴 P0~~ | ~~**用户信息持久化**~~ | ~~在磁盘上模拟 `/etc/passwd` 和 `/etc/shadow`，初始化时创建默认 root 用户~~ ✅ 已完成 | `context.c`、`src/user.c` | 中 |
-| 🟡 P1 | **ls 列出物理地址** | `ls()` 输出增加一列，显示文件数据块在磁盘上的块号 | `directory.c:dir_list()` | 小 |
+| ~~🟡 P1~~ | ~~**ls 列出物理地址**~~ | ~~`ls()` 输出增加一列，显示文件数据块在磁盘上的块号~~ | ~~`directory.c:dir_list()`~~ | ~~小~~ ✅ 已完成 |
 | 🟡 P1 | **时间戳更新** | 引入 `<time.h>`，在读写/创建时更新 `i_atime`/`i_mtime`/`i_ctime` | `file_ops.c`、`directory.c` | 小 |
 | 🟠 P2 | **间接块寻址** | `i_block[8]` → `i_block[15]`（12 直接 + 1 间接 + 1 双间接 + 1 三间接） | `ext2_types.h`、`bitmap.c`、`file_ops.c` | 大 |
 | 🟠 P2 | **超级块添加空闲计数** | `super_block` 增加 `sb_free_blocks_count` / `sb_free_inodes_count` | `ext2_types.h`、`context.c` | 小 |
