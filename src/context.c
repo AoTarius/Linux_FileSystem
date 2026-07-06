@@ -10,6 +10,7 @@
 #include "ext2_constants.h"
 #include "fs_context.h"
 #include "disk_io.h"
+#include "user.h"
 
 /* ---- 全局单例 ---- */
 struct fs_context ctx;
@@ -24,6 +25,10 @@ static void fs_mkfs(void)
 
     ctx.last_alloc_inode = 1;
     ctx.last_alloc_block = 0;
+    ctx.current_uid = 0;
+    ctx.current_gid = 0;
+    ctx.logged_in = 0;
+    strcpy(ctx.current_user, "root");
     for (i = 0; i < 16; i++)
         ctx.fopen_table[i] = 0;
     for (i = 0; i < BLOCK_SIZE; i++)
@@ -57,6 +62,21 @@ static void fs_mkfs(void)
 
     block_bmp_read();
     inode_bmp_read();
+
+    /* 预留用户区域块（磁盘末尾 10 个数据块），在位图中标记为已使用 */
+    {
+        int blk, base = DATA_BLOCK_COUNTS - USER_AREA_BLOCKS;
+        for (blk = 0; blk < USER_AREA_BLOCKS; blk++) {
+            int blk_no = base + blk;
+            int byte_idx = blk_no / 8;
+            int bit_idx  = blk_no % 8;
+            ctx.block_bmp[byte_idx] |= (unsigned char)(128 >> bit_idx);
+        }
+        block_bmp_write();
+        ctx.gd.bg_free_blocks_count -= USER_AREA_BLOCKS;
+        gd_write();
+        ctx.last_alloc_block += USER_AREA_BLOCKS;  /* 跳过用户区域 */
+    }
 
     /* 初始化根目录 inode */
     ctx.inode_cache.i_mode = 518;
@@ -138,12 +158,16 @@ int fs_init(void)
 
     ctx.last_alloc_inode = 1;
     ctx.last_alloc_block = 0;
+    ctx.current_uid = 0;
+    ctx.current_gid = 0;
+    ctx.logged_in = 0;
+    ctx.current_user[0] = '\0';
     {
         int i;
         for (i = 0; i < 16; i++)
             ctx.fopen_table[i] = 0;
     }
-    strcpy(ctx.current_path, "[root@ /");
+    strcpy(ctx.current_path, "/");
     ctx.current_dir = 1;
 
     ctx.fp = fopen("./Ext2", "r+");
@@ -171,6 +195,9 @@ int fs_init(void)
         }
         sb_read();
         gd_read();
+        /* 首次初始化时创建默认用户 */
+        user_init_default();
+        user_save();
         return 0;
     }
 

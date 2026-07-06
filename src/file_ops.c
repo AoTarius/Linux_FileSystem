@@ -328,7 +328,7 @@ void rmdir(char tmp[9])
                 }
             }
             if (ctx.inode_cache.i_size == 32) {
-                strcpy(ctx.current_path, "[root@");
+                strcpy(ctx.current_path, "/");
                 ctx.current_dir = 1;
                 rmdir(tmp);
             }

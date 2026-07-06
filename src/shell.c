@@ -6,13 +6,22 @@
 #include <string.h>
 #include "main.h"
 #include "fs_context.h"
+#include "user.h"
 
 void shell_run(void)
 {
-    char command[10], temp[9];
+    char command[10], temp[9], temp2[32];
 
+    /* ---- Login ---- */
+    if (user_login() != 0) {
+        printf("Login failed. Exiting.\n");
+        return;
+    }
+
+    /* ---- Main loop ---- */
     while (1) {
-        printf("%s]#", get_current_path());
+        printf("[%s@%s]%c", ctx.current_user, get_current_path(),
+               ctx.current_uid == 0 ? '#' : '$');
         scanf("%s", command);
 
         if (!strcmp(command, "cd")) {
@@ -56,7 +65,30 @@ void shell_run(void)
                 printf("Format Disk canceled\n");
         } else if (!strcmp(command, "ckdisk")) {
             check_disk();
+        } else if (!strcmp(command, "whoami")) {
+            printf("User: %s  (uid=%d, gid=%d)\n",
+                   ctx.current_user, ctx.current_uid, ctx.current_gid);
+        } else if (!strcmp(command, "useradd")) {
+            scanf("%s", temp);
+            printf("Password for %s: ", temp);
+            scanf("%31s", temp2);
+            user_add(temp, temp2);
+        } else if (!strcmp(command, "passwd")) {
+            char oldpass[32], newpass[32];
+            if (ctx.current_uid != 0) {
+                printf("Old password: ");
+                scanf("%31s", oldpass);
+            } else {
+                oldpass[0] = '\0';
+            }
+            printf("New password: ");
+            scanf("%31s", newpass);
+            user_passwd(oldpass, newpass);
+        } else if (!strcmp(command, "login")) {
+            /* 重新登录（切换用户） */
+            user_login();
         } else if (!strcmp(command, "quit")) {
+            user_save();  /* 退出前保存用户数据 */
             break;
         } else {
             printf("No this Command,Please check!\n");

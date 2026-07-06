@@ -74,6 +74,9 @@ void dir_entry_init(unsigned short ino, unsigned short name_len, int type)
         ctx.inode_cache.i_blocks = 0;
         ctx.inode_cache.i_mode = 0407;
     }
+    /* 设置文件所有者信息 */
+    ctx.inode_cache.i_uid = ctx.current_uid;
+    ctx.inode_cache.i_gid = ctx.current_gid;
     inode_write(ino);
 }
 

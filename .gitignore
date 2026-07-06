@@ -2,3 +2,5 @@ Ext2
 output/
 obj/
 .DS_Store
+.vscode/
+CLAUDE.md

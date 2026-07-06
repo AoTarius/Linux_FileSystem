@@ -34,6 +34,12 @@ struct fs_context {
     unsigned short current_dirlen;   // 当前目录名长度
     short fopen_table[16];           // 文件打开表（存 inode 号）
     char current_path[256];          // 当前路径字符串
+
+    /* 用户会话 */
+    unsigned short current_uid;      // 当前登录用户的 uid
+    unsigned short current_gid;      // 当前登录用户的 gid
+    char current_user[32];           // 当前登录用户名
+    int logged_in;                   // 是否已登录 (1=是, 0=否)
 };
 
 /* 全局单例 — 定义于 context.c */

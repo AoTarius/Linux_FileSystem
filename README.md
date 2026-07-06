@@ -32,10 +32,23 @@ make distclean # 清理编译产物 + 虚拟磁盘（./Ext2），彻底重置
 ./output/ext2fs
 ```
 
-首次运行时，程序会自动创建虚拟磁盘文件 `./Ext2` 并初始化文件系统。提示符如下：
+首次运行时，程序会自动创建虚拟磁盘文件 `./Ext2` 并初始化文件系统。默认创建一个 `root` 用户（密码 `root`）。登录提示符如下：
 
 ```
-[root@ /]#
+========================================
+  EXT2 File System Simulator - Login
+========================================
+Available users:
+  root (uid=0)
+
+Username: root
+Password: root
+
+Welcome, root!
+
+[root@/]#
+```
+> root (uid=0) 提示符以 `#` 结尾，普通用户以 `$` 结尾，与 Linux 一致。
 ```
 
 ## 命令列表 / Commands
@@ -54,34 +67,40 @@ make distclean # 清理编译产物 + 虚拟磁盘（./Ext2），彻底重置
 | `rmdir` | `rmdir <目录名>` | 删除空目录 |
 | `format` | `format` | 格式化磁盘 (清除所有数据) |
 | `ckdisk` | `ckdisk` | 查看磁盘状态 |
+| `whoami` | `whoami` | 查看当前登录用户信息 |
+| `useradd` | `useradd <用户名>` | 创建新用户 (仅限 root) |
+| `passwd` | `passwd` | 修改当前用户密码 |
+| `login` | `login` | 重新登录 (切换用户) |
 | `quit` | `quit` | 退出程序 |
 
 ### 示例 / Example Session
 
 ```
-[root@ /]# mkdir docs
-[root@ /docs/]# touch readme.txt
-[root@ /docs/]# open readme.txt
+[root@/]# mkdir docs
+[root@/docs/]# touch readme.txt
+[root@/docs/]# open readme.txt
 File readme.txt opened!
-[root@ /docs/]# write readme.txt
+[root@/docs/]# write readme.txt
 Hello World!#
-[root@ /docs/]# read readme.txt
+[root@/docs/]# read readme.txt
 Hello World!
-[root@ /docs/]# close readme.txt
+[root@/docs/]# close readme.txt
 File readme.txt closed!
-[root@ /docs/]# ls
+[root@/docs/]# ls
 items          type           mode           size
-.             <DIR>          r_w_x          ----
-..            <DIR>          r_w_x          ----
-readme.txt    <FILE>         r_w__          12 bytes
-[root@ /docs/]# cd ..
-[root@ /]# ckdisk
+.              <DIR>          r_w_x          ----
+..             <DIR>          r_w_x          ----
+readme.txt     <FILE>         r_w__          12 bytes
+[root@/docs/]# cd ..
+[root@/]# whoami
+User: root  (uid=0, gid=0)
+[root@/]# ckdisk
 volume name       : EXT2FS
 disk size         : 4612(blocks)
 blocks per group  : 4612(blocks)
 ext2 file size    : 2306(kb)
 block size        : 512(kb)
-[root@ /]# quit
+[root@/]# quit
 ```
 
 ## 磁盘布局 / Disk Layout
@@ -167,7 +186,6 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | 5 | **低** | — | `help` 命令已声明但未实现 |
 | 6 | **低** | — | 不支持多级路径 (`mkdir /a/b` 无效) |
 | 7 | **低** | `file_ops.c:file_write()` | 以 `#` 作为输入结束符，文件内容不能包含 `#` |
-| 8 | **低** | `context.c` | `current_path` 格式不规范 (`[root@ /` 末尾缺 `]`) |
 
 ## 后续开发计划 / Development Roadmap
 
@@ -175,8 +193,8 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 
 | 优先级 | 任务 | 说明 | 涉及文件 | 工作量 |
 |--------|------|------|----------|--------|
-| 🔴 P0 | **login 用户登录系统** | 设计用户数据结构，实现登录认证、会话管理，与 inode 的 `i_uid`/`i_gid` 联动 | `shell.c`、新建 `src/user.c`、`include/user.h` | 大 |
-| 🔴 P0 | **用户信息持久化** | 在磁盘上模拟 `/etc/passwd` 和 `/etc/shadow`，初始化时创建默认 root 用户 | `context.c`、新建 `src/user.c` | 中 |
+| ~~🔴 P0~~ | ~~**login 用户登录系统**~~ | ~~设计用户数据结构，实现登录认证、会话管理，与 inode 的 `i_uid`/`i_gid` 联动~~ ✅ 已完成 | `shell.c`、`src/user.c`、`include/user.h` | 大 |
+| ~~🔴 P0~~ | ~~**用户信息持久化**~~ | ~~在磁盘上模拟 `/etc/passwd` 和 `/etc/shadow`，初始化时创建默认 root 用户~~ ✅ 已完成 | `context.c`、`src/user.c` | 中 |
 | 🟡 P1 | **ls 列出物理地址** | `ls()` 输出增加一列，显示文件数据块在磁盘上的块号 | `directory.c:dir_list()` | 小 |
 | 🟡 P1 | **时间戳更新** | 引入 `<time.h>`，在读写/创建时更新 `i_atime`/`i_mtime`/`i_ctime` | `file_ops.c`、`directory.c` | 小 |
 | 🟠 P2 | **间接块寻址** | `i_block[8]` → `i_block[15]`（12 直接 + 1 间接 + 1 双间接 + 1 三间接） | `ext2_types.h`、`bitmap.c`、`file_ops.c` | 大 |
@@ -209,7 +227,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | **错误码返回** | `fread`/`fwrite`/`fseek` 添加错误检查 | `disk_io.c` | 中 |
 | **`help` 命令实现** | 补全 `help()` 函数体 | `shell.c` | 小 |
 | **`cat` → `touch` 重命名** | 函数名反映实际语义 | `main.h`、`file_ops.c`、`shell.c` | 小 |
-| **提示符格式修正** | `[root@ /` → `[root@ /]#` | `context.c` | 小 |
+| ~~**提示符格式修正**~~ | ~~`[root@ /` → `[root@ /]#`~~ → 已随 login 系统修复，root 显示 `#`，普通用户显示 `$` | `context.c` | 小 |
 | **write 结束符可配置** | `#` → `Ctrl+D` (EOF) | `file_ops.c` | 小 |
 
 ### 第四阶段：扩展功能（加分项 / 兴趣探索）
