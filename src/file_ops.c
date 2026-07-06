@@ -4,12 +4,40 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include "fs_context.h"
 #include "ext2_constants.h"
 #include "disk_io.h"
 #include "bitmap.h"
 #include "directory.h"
 #include "file_ops.h"
+
+/*
+ * 权限检查 — 基于 uid/gid 的 user/group/other 三级判断。
+ * root (uid==0) 绕过所有权限检查。
+ * 返回 1=允许, 0=拒绝。
+ */
+static int check_read_perm(unsigned short mode,
+                           unsigned short file_uid, unsigned short file_gid)
+{
+    if (ctx.current_uid == 0) return 1;  /* root 可读一切 */
+    if (ctx.current_uid == file_uid)
+        return (mode & S_IRUSR) ? 1 : 0;
+    if (ctx.current_gid == file_gid)
+        return (mode & S_IRGRP) ? 1 : 0;
+    return (mode & S_IROTH) ? 1 : 0;
+}
+
+static int check_write_perm(unsigned short mode,
+                            unsigned short file_uid, unsigned short file_gid)
+{
+    if (ctx.current_uid == 0) return 1;  /* root 可写一切 */
+    if (ctx.current_uid == file_uid)
+        return (mode & S_IWUSR) ? 1 : 0;
+    if (ctx.current_gid == file_gid)
+        return (mode & S_IWGRP) ? 1 : 0;
+    return (mode & S_IWOTH) ? 1 : 0;
+}
 
 /* ---- 创建文件/目录（统一入口） ---- */
 
@@ -56,6 +84,12 @@ void file_create(const char *name, int type)
             dir_write(ctx.inode_cache.i_block[ctx.inode_cache.i_blocks - 1]);
         }
         ctx.inode_cache.i_size += 16;
+        /* 目录内容变更 — 更新目录的 mtime / ctime */
+        {
+            time_t now = time(NULL);
+            ctx.inode_cache.i_mtime = (unsigned long)now;
+            ctx.inode_cache.i_ctime = (unsigned long)now;
+        }
         inode_write(ctx.current_dir);
         dir_entry_init(tmpno, strlen(name), type);
     } else {
@@ -84,6 +118,8 @@ void file_delete(const char *name)
             bfree(ctx.inode_cache.i_block[m++]);
         ctx.inode_cache.i_blocks = 0;
         ctx.inode_cache.i_size = 0;
+        ctx.inode_cache.i_dtime = (unsigned long)time(NULL);
+        inode_write(i);
         ifree(i);
 
         /* 更新父目录 */
@@ -111,6 +147,13 @@ void file_delete(const char *name)
                 }
             }
         }
+        /* 目录内容变更 — 更新目录的 mtime / ctime */
+        {
+            time_t now = time(NULL);
+            ctx.inode_cache.i_mtime = (unsigned long)now;
+            ctx.inode_cache.i_ctime = (unsigned long)now;
+        }
+
         inode_write(ctx.current_dir);
     } else {
         printf("The file %s not exists!\n", name);
@@ -166,8 +209,10 @@ void file_read(const char *name)
     if (dir_lookup(name, 1, &i, &j, &k)) {
         if (file_is_open(ctx.dir_cache[k].inode)) {
             inode_read(ctx.dir_cache[k].inode);
-            if (!(ctx.inode_cache.i_mode & 4)) {
-                printf("The file %s can not be read!\n", name);
+            if (!check_read_perm(ctx.inode_cache.i_mode,
+                                ctx.inode_cache.i_uid,
+                                ctx.inode_cache.i_gid)) {
+                printf("Permission denied: cannot read %s\n", name);
                 return;
             }
             for (flag = 0; flag < ctx.inode_cache.i_blocks; flag++) {
@@ -181,6 +226,10 @@ void file_read(const char *name)
                 printf("The file %s is empty!\n", name);
             else
                 printf("\n");
+
+            /* 更新访问时间 */
+            ctx.inode_cache.i_atime = (unsigned long)time(NULL);
+            inode_write(ctx.dir_cache[k].inode);
         } else {
             printf("The file %s has not been opened!\n", name);
         }
@@ -198,8 +247,10 @@ void file_write(const char *name)
     if (dir_lookup(name, 1, &i, &j, &k)) {
         if (file_is_open(ctx.dir_cache[k].inode)) {
             inode_read(ctx.dir_cache[k].inode);
-            if (!(ctx.inode_cache.i_mode & 2)) {
-                printf("The file %s can not be writed!\n", name);
+            if (!check_write_perm(ctx.inode_cache.i_mode,
+                                 ctx.inode_cache.i_uid,
+                                 ctx.inode_cache.i_gid)) {
+                printf("Permission denied: cannot write %s\n", name);
                 return;
             }
             fflush(stdin);
@@ -245,6 +296,12 @@ void file_write(const char *name)
                         data_write(ctx.inode_cache.i_block[j]);
                     }
                     j++;
+                }
+                /* 更新修改时间和 inode 变更时间 */
+                {
+                    time_t now = time(NULL);
+                    ctx.inode_cache.i_mtime = (unsigned long)now;
+                    ctx.inode_cache.i_ctime = (unsigned long)now;
                 }
                 inode_write(ctx.dir_cache[k].inode);
             } else {
@@ -308,6 +365,13 @@ void rmdir(char tmp[9])
                 }
             }
         }
+        /* 目录内容变更 — 更新目录的 mtime / ctime */
+        {
+            time_t now = time(NULL);
+            ctx.inode_cache.i_mtime = (unsigned long)now;
+            ctx.inode_cache.i_ctime = (unsigned long)now;
+        }
+
         inode_write(ctx.current_dir);
     } else {  /* 非空目录：递归删除 */
         int l;

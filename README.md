@@ -55,7 +55,7 @@ Welcome, root!
 
 | 命令 | 用法 | 说明 |
 |------|------|------|
-| `ls` | `ls` | 列出当前目录内容 |
+| `ls` | `ls` | 列出当前目录内容（含物理地址和修改时间） |
 | `cd` | `cd <目录名>` | 切换目录 (`.` 当前, `..` 上级) |
 | `mkdir` | `mkdir <目录名>` | 创建目录 |
 | `touch` | `touch <文件名>` | 创建普通文件 |
@@ -87,10 +87,10 @@ Hello World!
 [root@/docs/]# close readme.txt
 File readme.txt closed!
 [root@/docs/]# ls
-items          type           mode           blocks             size
-.              <DIR>          r_w_x               525          ----
-..             <DIR>          r_w_x               524          ----
-readme.txt     <FILE>         r_w__               526            12 bytes
+items          type           mode         blocks             mtime            size
+.              <DIR>          rwxr-xr-x         525  07-06 15:49:13          ----
+..             <DIR>          rwxr-xr-x         524  07-06 15:49:13          ----
+readme.txt     <FILE>         rw-r--r--         526  07-06 15:49:13            12 bytes
 [root@/docs/]# cd ..
 [root@/]# whoami
 User: root  (uid=0, gid=0)
@@ -196,7 +196,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | ~~🔴 P0~~ | ~~**login 用户登录系统**~~ | ~~设计用户数据结构，实现登录认证、会话管理，与 inode 的 `i_uid`/`i_gid` 联动~~ ✅ 已完成 | `shell.c`、`src/user.c`、`include/user.h` | 大 |
 | ~~🔴 P0~~ | ~~**用户信息持久化**~~ | ~~在磁盘上模拟 `/etc/passwd` 和 `/etc/shadow`，初始化时创建默认 root 用户~~ ✅ 已完成 | `context.c`、`src/user.c` | 中 |
 | ~~🟡 P1~~ | ~~**ls 列出物理地址**~~ | ~~`ls()` 输出增加一列，显示文件数据块在磁盘上的块号~~ | ~~`directory.c:dir_list()`~~ | ~~小~~ ✅ 已完成 |
-| 🟡 P1 | **时间戳更新** | 引入 `<time.h>`，在读写/创建时更新 `i_atime`/`i_mtime`/`i_ctime` | `file_ops.c`、`directory.c` | 小 |
+| ~~🟡 P1~~ | ~~**时间戳更新**~~ | ~~引入 `<time.h>`，在读写/创建时更新 `i_atime`/`i_mtime`/`i_ctime`~~ | ~~`file_ops.c`、`directory.c`~~ | ~~小~~ ✅ 已完成 |
 | 🟠 P2 | **间接块寻址** | `i_block[8]` → `i_block[15]`（12 直接 + 1 间接 + 1 双间接 + 1 三间接） | `ext2_types.h`、`bitmap.c`、`file_ops.c` | 大 |
 | 🟠 P2 | **超级块添加空闲计数** | `super_block` 增加 `sb_free_blocks_count` / `sb_free_inodes_count` | `ext2_types.h`、`context.c` | 小 |
 
@@ -205,7 +205,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | 任务 | 说明 | 涉及文件 | 工作量 |
 |------|------|----------|--------|
 | **多块组支持** | 当前仅 1 个块组，需支持多块组（独立 GDT 副本和位图） | `ext2_types.h`、`disk_io.c`、`context.c` | 大 |
-| **完整权限系统** | `i_mode` 实现 user/group/other 三级 `rwxrwxrwx` 共 9 位 | `file_ops.c`、`directory.c` | 中 |
+| ~~**完整权限系统**~~ | ~~`i_mode` 实现 user/group/other 三级 `rwxrwxrwx` 共 9 位~~ | ~~`file_ops.c`、`directory.c`~~ | ~~中~~ ✅ 已完成 |
 | **硬链接** | `i_links_count` 字段已定义未使用，实现 `ln` 命令 | `file_ops.c`、`directory.c` | 中 |
 | **chmod / chown 命令** | 修改文件的权限位和所有者 | `file_ops.c` | 中 |
 | **绝对路径 & 多级路径** | 支持 `mkdir /home/user/docs`、`cd /home` 等 | `directory.c` | 中 |

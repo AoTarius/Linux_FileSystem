@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include "ext2_constants.h"
 #include "fs_context.h"
 #include "disk_io.h"
@@ -79,12 +80,15 @@ static void fs_mkfs(void)
     }
 
     /* 初始化根目录 inode */
-    ctx.inode_cache.i_mode = 518;
+    ctx.inode_cache.i_mode = DEFAULT_DIR_MODE;
     ctx.inode_cache.i_blocks = 0;
     ctx.inode_cache.i_size = 32;
-    ctx.inode_cache.i_atime = 0;
-    ctx.inode_cache.i_ctime = 0;
-    ctx.inode_cache.i_mtime = 0;
+    {
+        time_t now = time(NULL);
+        ctx.inode_cache.i_atime = (unsigned long)now;
+        ctx.inode_cache.i_ctime = (unsigned long)now;
+        ctx.inode_cache.i_mtime = (unsigned long)now;
+    }
     ctx.inode_cache.i_dtime = 0;
 
     /* 为根目录分配数据块 — 手动操作位图（避免引入 bitmap 模块依赖） */

@@ -89,11 +89,11 @@
 | Data Blocks | ✅ 已实现 | 4096 个数据块 |
 | mkdir / touch / rm / rmdir | ✅ 已实现 | |
 | open / close | ✅ 已实现 | |
-| read / write | ✅ 已实现 | 含基本权限检查 |
-| 读写权限位 (rwx) | ✅ 已实现 | `i_mode` 字段 |
+| read / write | ✅ 已实现 | 含 uid/gid 三级权限检查（owner → group → other） |
+| 读写权限位 (rwx) | ✅ 已实现 | 完整 9 位 `rwxrwxrwx`，基于 uid/gid 三级判断，root 绕过 |
 | 多级目录 | ✅ 已实现 | cd 切换 |
 | **login 用户登录** | ✅ 已实现 | 启动时登录认证，支持 `login` 切换用户，最多 3 次重试 |
 | **用户信息存储** | ✅ 已实现 | 磁盘末尾预留 10 块存储用户数据库，`i_uid`/`i_gid` 自动关联 |
 | **ls 列出物理地址** | ✅ 已实现 | `ls` 增加 `blocks` 列，显示文件数据块在磁盘上的绝对块号 |
-| **时间戳更新** | ❌ 未实现 | `atime`/`mtime`/`ctime` 字段始终为 0 |
+| **时间戳更新** | ✅ 已实现 | 创建时设置 atime/ctime/mtime；写入更新 mtime/ctime；读取更新 atime；删除设置 dtime |
 | **间接块寻址** | ❌ 未实现 | 仅 8 个直接块，需求为 12 直接 + 1 间接 + 1 双间接 + 1 三间接 |

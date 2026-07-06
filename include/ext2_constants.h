@@ -46,4 +46,23 @@
 #define USER_AREA_START     (DATA_BLOCK + (DATA_BLOCK_COUNTS - USER_AREA_BLOCKS) * BLOCK_SIZE)
                                           // 起始字节偏移 = 数据区基址 + (可分配块数 - 保留块数) × 块大小
 
+/* ---- Unix rwxrwxrwx 权限位 ---- */
+#define S_IRUSR  0400   /* owner read    */
+#define S_IWUSR  0200   /* owner write   */
+#define S_IXUSR  0100   /* owner execute */
+#define S_IRGRP  0040   /* group read    */
+#define S_IWGRP  0020   /* group write   */
+#define S_IXGRP  0010   /* group execute */
+#define S_IROTH  0004   /* other read    */
+#define S_IWOTH  0002   /* other write   */
+#define S_IXOTH  0001   /* other execute */
+
+#define DEFAULT_DIR_MODE   0755   /* rwxr-xr-x */
+#define DEFAULT_FILE_MODE  0644   /* rw-r--r-- */
+
+/* 从 i_mode 提取权限类型：owner / group / other */
+#define PERM_OWNER(mode, bit)  ((mode) & (bit))
+#define PERM_GROUP(mode, bit)  ((mode) & ((bit) >> 3))
+#define PERM_OTHER(mode, bit)  ((mode) & ((bit) >> 6))
+
 #endif // _EXT2_CONSTANTS_H

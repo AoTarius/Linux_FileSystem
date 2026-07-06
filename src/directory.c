@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include "fs_context.h"
 #include "ext2_constants.h"
 #include "disk_io.h"
@@ -68,15 +69,24 @@ void dir_entry_init(unsigned short ino, unsigned short name_len, int type)
         strcpy(ctx.dir_cache[1].name, "..");
         dir_write(ctx.inode_cache.i_block[0]);
 
-        ctx.inode_cache.i_mode = 01006;
+        ctx.inode_cache.i_mode = DEFAULT_DIR_MODE;
     } else {  /* 普通文件 */
         ctx.inode_cache.i_size = 0;
         ctx.inode_cache.i_blocks = 0;
-        ctx.inode_cache.i_mode = 0407;
+        ctx.inode_cache.i_mode = DEFAULT_FILE_MODE;
     }
     /* 设置文件所有者信息 */
     ctx.inode_cache.i_uid = ctx.current_uid;
     ctx.inode_cache.i_gid = ctx.current_gid;
+
+    /* 设置时间戳 — 创建时 atime / mtime / ctime 均为当前时间 */
+    {
+        time_t now = time(NULL);
+        ctx.inode_cache.i_atime = (unsigned long)now;
+        ctx.inode_cache.i_mtime = (unsigned long)now;
+        ctx.inode_cache.i_ctime = (unsigned long)now;
+    }
+
     inode_write(ino);
 }
 
@@ -119,13 +129,48 @@ static void format_block_str(char *out, int maxlen,
     }
 }
 
+/*
+ * 格式化权限为 9 字符 rwxrwxrwx 字符串。
+ *   mode & S_IRUSR → 'r' else '-',  mode & S_IWUSR → 'w' else '-', ...
+ */
+static void format_mode_str(char *out, unsigned short mode)
+{
+    out[0] = (mode & S_IRUSR) ? 'r' : '-';
+    out[1] = (mode & S_IWUSR) ? 'w' : '-';
+    out[2] = (mode & S_IXUSR) ? 'x' : '-';
+    out[3] = (mode & S_IRGRP) ? 'r' : '-';
+    out[4] = (mode & S_IWGRP) ? 'w' : '-';
+    out[5] = (mode & S_IXGRP) ? 'x' : '-';
+    out[6] = (mode & S_IROTH) ? 'r' : '-';
+    out[7] = (mode & S_IWOTH) ? 'w' : '-';
+    out[8] = (mode & S_IXOTH) ? 'x' : '-';
+    out[9] = '\0';
+}
+
+/*
+ * 格式化修改时间为 "MM-DD HH:MM" 字符串。
+ * 时间戳为 0 时输出 "----"。
+ */
+static void format_time_str(char *out, int maxlen, unsigned long timestamp)
+{
+    if (timestamp == 0) {
+        strcpy(out, "----");
+        return;
+    }
+    {
+        time_t t = (time_t)timestamp;
+        struct tm *tm_info = localtime(&t);
+        strftime(out, (size_t)maxlen, "%m-%d %H:%M:%S", tm_info);
+    }
+}
+
 void dir_list(void)
 {
     unsigned short i, j, k, type_flag;
-    char block_str[32];
-    int blk_len;
+    char block_str[32], time_str[16];
+    int blk_len, time_len;
 
-    printf("items          type           mode           blocks             size\n");
+    printf("items          type           mode         blocks             mtime            size\n");
     inode_read(ctx.current_dir);
     for (i = 0; i < ctx.inode_cache.i_blocks; i++) {
         dir_read(ctx.inode_cache.i_block[i]);
@@ -148,14 +193,11 @@ void dir_list(void)
                     type_flag = 2;
                 }
                 printf("<DIR>          ");
-                switch (ctx.inode_cache.i_mode & 7) {
-                    case 1: printf("____x"); break;
-                    case 2: printf("__w__"); break;
-                    case 3: printf("__w_x"); break;
-                    case 4: printf("r____"); break;
-                    case 5: printf("r___x"); break;
-                    case 6: printf("r_w__"); break;
-                    case 7: printf("r_w_x"); break;
+                /* ---- 权限列 (9 位 rwxrwxrwx) ---- */
+                {
+                    char mode_str[10];
+                    format_mode_str(mode_str, ctx.inode_cache.i_mode);
+                    printf("%s ", mode_str);
                 }
                 /* ---- 物理地址列 ---- */
                 format_block_str(block_str, sizeof(block_str),
@@ -166,6 +208,14 @@ void dir_list(void)
                 while (j++ < 18 - blk_len) printf(" ");
                 printf("%s", block_str);
 
+                /* ---- 修改时间列 ---- */
+                format_time_str(time_str, sizeof(time_str),
+                                ctx.inode_cache.i_mtime);
+                time_len = (int)strlen(time_str);
+                j = 0;
+                while (j++ < 16 - time_len) printf(" ");
+                printf("%s", time_str);
+
                 if (type_flag != 2)
                     printf("          ----");
                 else
@@ -175,14 +225,11 @@ void dir_list(void)
                 j = 0;
                 while (j++ < 15 - ctx.dir_cache[k].name_len) printf(" ");
                 printf("<FILE>         ");
-                switch (ctx.inode_cache.i_mode & 7) {
-                    case 1: printf("____x"); break;
-                    case 2: printf("__w__"); break;
-                    case 3: printf("__w_x"); break;
-                    case 4: printf("r____"); break;
-                    case 5: printf("r___x"); break;
-                    case 6: printf("r_w__"); break;
-                    case 7: printf("r_w_x"); break;
+                /* ---- 权限列 (9 位 rwxrwxrwx) ---- */
+                {
+                    char mode_str[10];
+                    format_mode_str(mode_str, ctx.inode_cache.i_mode);
+                    printf("%s ", mode_str);
                 }
                 /* ---- 物理地址列 ---- */
                 format_block_str(block_str, sizeof(block_str),
@@ -192,6 +239,14 @@ void dir_list(void)
                 j = 0;
                 while (j++ < 18 - blk_len) printf(" ");
                 printf("%s", block_str);
+
+                /* ---- 修改时间列 ---- */
+                format_time_str(time_str, sizeof(time_str),
+                                ctx.inode_cache.i_mtime);
+                time_len = (int)strlen(time_str);
+                j = 0;
+                while (j++ < 16 - time_len) printf(" ");
+                printf("%s", time_str);
 
                 printf("          %4ld bytes", ctx.inode_cache.i_size);
             }
