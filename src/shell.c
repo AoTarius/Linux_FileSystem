@@ -32,7 +32,7 @@ void shell_run(void)
             mkdir(temp, 2);
         } else if (!strcmp(command, "touch")) {
             scanf("%s", temp);
-            cat(temp, 1);
+            touch(temp, 1);
         } else if (!strcmp(command, "rmdir")) {
             scanf("%s", temp);
             rmdir(temp);
@@ -104,6 +104,8 @@ void shell_run(void)
             break;
         } else {
             printf("No this Command,Please check!\n");
+            while (getchar() != '\n');     /* 跳过本行剩余内容 */
+            continue;
         }
         getchar();
     }

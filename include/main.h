@@ -16,7 +16,7 @@ void rmdir(const char *tmp);
 void ls(void);
 
 /* 文件操作 */
-void cat(const char *tmp, int type);
+void touch(const char *tmp, int type);
 void del(const char *tmp);
 void open_file(const char *tmp);
 void close_file(const char *tmp);

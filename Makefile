@@ -8,7 +8,7 @@ OBJDIR   = obj
 
 SRCS     = src/main.c src/shell.c src/context.c \
            src/disk_io.c src/bitmap.c src/directory.c src/file_ops.c \
-           src/user.c
+           src/file_cmd.c src/user.c
 OBJS     = $(SRCS:src/%.c=$(OBJDIR)/%.o)
 
 .PHONY: all clean run debug

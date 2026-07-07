@@ -155,15 +155,19 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 │   ├── bitmap.h                # 层 1: 位图分配 / 回收
 │   ├── directory.h             # 层 2: 目录项操作
 │   ├── file_ops.h              # 层 2: 文件操作
+│   ├── file_ops.h              # 层 2: 文件操作
+│   ├── user.h                  # 用户管理 API
 │   └── main.h                  # 公共命令接口 (供 shell 使用)
 ├── src/                        # 源文件
-│   ├── main.c                  # 入口 (20 行)
-│   ├── shell.c                 # 交互循环 & 命令解析 (66 行)
-│   ├── context.c               # ctx 所有者 & 生命周期 (216 行)
+│   ├── main.c                  # 入口 (22 行)
+│   ├── shell.c                 # 交互循环 & 命令解析 (110 行)
+│   ├── context.c               # ctx 所有者 & 生命周期 (254 行)
 │   ├── disk_io.c               # 层 0: 磁盘 I/O (131 行)
-│   ├── bitmap.c                # 层 1: 位图管理 (111 行)
-│   ├── directory.c             # 层 2: 目录操作 (181 行)
-│   └── file_ops.c              # 层 2-3: 文件操作 & 删除 (350 行)
+│   ├── bitmap.c                # 层 1: 位图管理 (119 行)
+│   ├── directory.c             # 层 2: 目录操作 (360 行)
+│   ├── file_ops.c              # 层 2: 文件操作层 (594 行)
+│   ├── file_cmd.c              # 层 3: 文件命令 (617 行)
+│   └── user.c                  # 用户管理子系统 (325 行)
 ├── output/                     # 编译输出目录
 │   └── ext2fs                  # 编译后的二进制 (~52 KB)
 ├── Makefile                    # 构建系统
@@ -200,7 +204,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | 1 | **中** | `shell.c` | `scanf("%s",temp)` 无缓冲区大小限制 — 输入过长会栈溢出。已缓解：`temp` 从 `[9]` 扩大到 `[256]`，但未根本解决（需改用 `fgets`） |
 | 2 | **高** | `shell.c` / `file_ops.c` | `fflush(stdin)` 是 C 标准的**未定义行为** |
 | 3 | **中** | `file_ops.c:rmdir()` | 递归删除时覆盖 `current_path` / `current_dir`，导致非空目录删除失败 |
-| 4 | **低** | `main.h` | `cat()` 实际语义是 `touch`（创建文件），函数名有误导性 |
+| ~~4~~ | ~~**低**~~ | ~~`main.h`~~ | ~~`cat()` 实际语义是 `touch`（创建文件），函数名有误导性~~ → ✅ 已修复 |
 | 5 | **低** | — | `help` 命令已声明但未实现 |
 | ~~6~~ | ~~**低**~~ | ~~—~~ | ~~不支持多级路径 (`mkdir /a/b` 无效)~~ → ✅ 已修复：`cd`、`mkdir`、`touch` 均支持多级路径 |
 | 7 | **低** | `file_ops.c:file_write()` | 以 `#` 作为输入结束符，文件内容不能包含 `#` |
@@ -244,7 +248,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | **`fflush(stdin)` 替换** | 平台兼容方式清空输入缓冲 | `shell.c`、`file_ops.c` | 小 |
 | **错误码返回** | `fread`/`fwrite`/`fseek` 添加错误检查 | `disk_io.c` | 中 |
 | **`help` 命令实现** | 补全 `help()` 函数体 | `shell.c` | 小 |
-| **`cat` → `touch` 重命名** | 函数名反映实际语义 | `main.h`、`file_ops.c`、`shell.c` | 小 |
+| ~~**`cat` → `touch` 重命名**~~ | ~~函数名反映实际语义~~ → ✅ 已完成 | `main.h`、`file_ops.c`、`shell.c` | ~~小~~ ✅ |
 | ~~**提示符格式修正**~~ | ~~`[root@ /` → `[root@ /]#`~~ → 已随 login 系统修复，root 显示 `#`，普通用户显示 `$` | `context.c` | 小 |
 | **write 结束符可配置** | `#` → `Ctrl+D` (EOF) | `file_ops.c` | 小 |
 
