@@ -85,9 +85,9 @@ static void fs_mkfs(void)
     ctx.inode_cache.i_size = 32;
     {
         time_t now = time(NULL);
-        ctx.inode_cache.i_atime = (unsigned long)now;
-        ctx.inode_cache.i_ctime = (unsigned long)now;
-        ctx.inode_cache.i_mtime = (unsigned long)now;
+        ctx.inode_cache.i_atime = (unsigned int)now;
+        ctx.inode_cache.i_ctime = (unsigned int)now;
+        ctx.inode_cache.i_mtime = (unsigned int)now;
     }
     ctx.inode_cache.i_dtime = 0;
 
@@ -147,6 +147,11 @@ static void fs_mkfs(void)
     strcpy(ctx.dir_cache[0].name, ".");
     strcpy(ctx.dir_cache[1].name, "..");
     dir_write(ctx.inode_cache.i_block[0]);
+
+    /* 同步超级块空闲计数（与组描述符一致） */
+    ctx.sb.sb_free_blocks_count = ctx.gd.bg_free_blocks_count;
+    ctx.sb.sb_free_inodes_count = ctx.gd.bg_free_inodes_count;
+    sb_write();
 
     printf("The ext2 file system has been installed!\n");
     check_disk();
@@ -232,6 +237,8 @@ void check_disk(void)
     printf("volume name       : %s\n", ctx.sb.sb_volume_name);
     printf("disk size         : %d(blocks)\n", ctx.sb.sb_disk_size);
     printf("blocks per group  : %d(blocks)\n", ctx.sb.sb_blocks_per_group);
+    printf("free blocks       : %u\n", ctx.sb.sb_free_blocks_count);
+    printf("free inodes       : %u\n", ctx.sb.sb_free_inodes_count);
     printf("ext2 file size    : %d(kb)\n",
            ctx.sb.sb_disk_size * ctx.sb.sb_size_per_block / 1024);
     printf("block size        : %d(kb)\n", ctx.sb.sb_size_per_block);

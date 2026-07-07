@@ -82,9 +82,9 @@ void dir_entry_init(unsigned short ino, unsigned short name_len, int type)
     /* 设置时间戳 — 创建时 atime / mtime / ctime 均为当前时间 */
     {
         time_t now = time(NULL);
-        ctx.inode_cache.i_atime = (unsigned long)now;
-        ctx.inode_cache.i_mtime = (unsigned long)now;
-        ctx.inode_cache.i_ctime = (unsigned long)now;
+        ctx.inode_cache.i_atime = (unsigned int)now;
+        ctx.inode_cache.i_mtime = (unsigned int)now;
+        ctx.inode_cache.i_ctime = (unsigned int)now;
     }
 
     inode_write(ino);
@@ -151,7 +151,7 @@ static void format_mode_str(char *out, unsigned short mode)
  * 格式化修改时间为 "MM-DD HH:MM" 字符串。
  * 时间戳为 0 时输出 "----"。
  */
-static void format_time_str(char *out, int maxlen, unsigned long timestamp)
+static void format_time_str(char *out, int maxlen, unsigned int timestamp)
 {
     if (timestamp == 0) {
         strcpy(out, "----");
@@ -196,8 +196,8 @@ void dir_list(void)
                         !strcmp(ctx.dir_cache[k].name, ".."))
                         sprintf(size_str, "----");
                     else
-                        sprintf(size_str, "%lu bytes",
-                                (unsigned long)ctx.inode_cache.i_size);
+                        sprintf(size_str, "%u bytes",
+                                (unsigned int)ctx.inode_cache.i_size);
 
                     printf("%-15s %-15s %-10s %-18s %-16s %-12s\n",
                            ctx.dir_cache[k].name, "<DIR>",
@@ -215,8 +215,8 @@ void dir_list(void)
 
                 {
                     char size_str[16];
-                    sprintf(size_str, "%lu bytes",
-                            (unsigned long)ctx.inode_cache.i_size);
+                    sprintf(size_str, "%u bytes",
+                            (unsigned int)ctx.inode_cache.i_size);
 
                     printf("%-15s %-15s %-10s %-18s %-16s %-12s\n",
                            ctx.dir_cache[k].name, "<FILE>",

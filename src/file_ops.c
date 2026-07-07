@@ -39,6 +39,118 @@ static int check_write_perm(unsigned short mode,
     return (mode & S_IWOTH) ? 1 : 0;
 }
 
+/* ================================================================
+ * 间接块寻址 — 逻辑块号 → 物理块号
+ * ================================================================ */
+
+/*
+ * 将文件的逻辑块号映射为物理块号。
+ * 若 allocate=1 且逻辑块超出已分配范围，则自动分配间接块。
+ * 调用前需确保 ctx.inode_cache 已载入目标 inode。
+ */
+static unsigned short get_file_block(unsigned short ino,
+                                     unsigned short logical,
+                                     int allocate)
+{
+    unsigned short phys;
+
+    /* 直接块 */
+    if (logical < DIRECT_BLOCKS) {
+        if (allocate && ctx.inode_cache.i_block[logical] == 0) {
+            ctx.inode_cache.i_block[logical] = balloc();
+            ctx.inode_cache.i_blocks++;
+            inode_write(ino);
+        }
+        return ctx.inode_cache.i_block[logical];
+    }
+
+    /* 一级间接块 */
+    {
+        unsigned short idx = logical - DIRECT_BLOCKS;
+        if (idx >= INDIRECT_PTRS) {
+            /* 超出本系统支持范围 (二级/三级未实现，磁盘2MB用不到) */
+            return 0;
+        }
+
+        /* 确保间接块存在 */
+        if (ctx.inode_cache.i_block[SINGLE_INDIRECT] == 0) {
+            if (!allocate) return 0;
+            ctx.inode_cache.i_block[SINGLE_INDIRECT] = balloc();
+            ctx.inode_cache.i_blocks++;
+            /* 清零间接块 */
+            {
+                unsigned short z;
+                data_read(ctx.inode_cache.i_block[SINGLE_INDIRECT]);
+                for (z = 0; z < BLOCK_SIZE; z++)
+                    ctx.data_buf[z] = 0;
+                data_write(ctx.inode_cache.i_block[SINGLE_INDIRECT]);
+            }
+            inode_write(ino);
+        }
+
+        /* 从间接块中读取指针 */
+        data_read(ctx.inode_cache.i_block[SINGLE_INDIRECT]);
+        phys = ((unsigned short *)ctx.data_buf)[idx];
+
+        if (phys == 0 && allocate) {
+            phys = balloc();
+            ((unsigned short *)ctx.data_buf)[idx] = phys;
+            data_write(ctx.inode_cache.i_block[SINGLE_INDIRECT]);
+            ctx.inode_cache.i_blocks++;
+            inode_write(ino);
+        }
+
+        return phys;
+    }
+}
+
+/*
+ * 释放文件所有数据块（包括间接块）。
+ * 调用前需确保 ctx.inode_cache 已载入目标 inode。
+ */
+static void free_file_blocks(unsigned short ino)
+{
+    unsigned short i;
+
+    /* 释放直接块 */
+    for (i = 0; i < DIRECT_BLOCKS; i++) {
+        if (ctx.inode_cache.i_block[i]) {
+            bfree(ctx.inode_cache.i_block[i]);
+            ctx.inode_cache.i_block[i] = 0;
+        }
+    }
+
+    /* 释放一级间接块及其指向的所有数据块 */
+    if (ctx.inode_cache.i_block[SINGLE_INDIRECT]) {
+        unsigned short *ptrs;
+        data_read(ctx.inode_cache.i_block[SINGLE_INDIRECT]);
+        ptrs = (unsigned short *)ctx.data_buf;
+        for (i = 0; i < INDIRECT_PTRS; i++) {
+            if (ptrs[i]) {
+                bfree(ptrs[i]);
+                ptrs[i] = 0;
+            }
+        }
+        bfree(ctx.inode_cache.i_block[SINGLE_INDIRECT]);
+        ctx.inode_cache.i_block[SINGLE_INDIRECT] = 0;
+    }
+
+    /* 二级/三级间接块：本磁盘仅 2MB，实际不会用到，预留框架 */
+    if (ctx.inode_cache.i_block[DOUBLE_INDIRECT]) {
+        bfree(ctx.inode_cache.i_block[DOUBLE_INDIRECT]);
+        ctx.inode_cache.i_block[DOUBLE_INDIRECT] = 0;
+    }
+    if (ctx.inode_cache.i_block[TRIPLE_INDIRECT]) {
+        bfree(ctx.inode_cache.i_block[TRIPLE_INDIRECT]);
+        ctx.inode_cache.i_block[TRIPLE_INDIRECT] = 0;
+    }
+
+    ctx.inode_cache.i_blocks = 0;
+    ctx.inode_cache.i_size   = 0;
+    ctx.inode_cache.i_dtime  = (unsigned int)time(NULL);
+    inode_write(ino);
+}
+
 /* ---- 创建文件/目录（统一入口） ---- */
 
 void file_create(const char *name, int type)
@@ -87,8 +199,8 @@ void file_create(const char *name, int type)
         /* 目录内容变更 — 更新目录的 mtime / ctime */
         {
             time_t now = time(NULL);
-            ctx.inode_cache.i_mtime = (unsigned long)now;
-            ctx.inode_cache.i_ctime = (unsigned long)now;
+            ctx.inode_cache.i_mtime = (unsigned int)now;
+            ctx.inode_cache.i_ctime = (unsigned int)now;
         }
         inode_write(ctx.current_dir);
         dir_entry_init(tmpno, strlen(name), type);
@@ -114,12 +226,7 @@ void file_delete(const char *name)
             ctx.fopen_table[flag] = 0;
 
         inode_read(i);
-        while (m < ctx.inode_cache.i_blocks)
-            bfree(ctx.inode_cache.i_block[m++]);
-        ctx.inode_cache.i_blocks = 0;
-        ctx.inode_cache.i_size = 0;
-        ctx.inode_cache.i_dtime = (unsigned long)time(NULL);
-        inode_write(i);
+        free_file_blocks(i);
         ifree(i);
 
         /* 更新父目录 */
@@ -150,8 +257,8 @@ void file_delete(const char *name)
         /* 目录内容变更 — 更新目录的 mtime / ctime */
         {
             time_t now = time(NULL);
-            ctx.inode_cache.i_mtime = (unsigned long)now;
-            ctx.inode_cache.i_ctime = (unsigned long)now;
+            ctx.inode_cache.i_mtime = (unsigned int)now;
+            ctx.inode_cache.i_ctime = (unsigned int)now;
         }
 
         inode_write(ctx.current_dir);
@@ -215,20 +322,29 @@ void file_read(const char *name)
                 printf("Permission denied: cannot read %s\n", name);
                 return;
             }
-            for (flag = 0; flag < ctx.inode_cache.i_blocks; flag++) {
-                data_read(ctx.inode_cache.i_block[flag]);
-                unsigned short bytes = ctx.inode_cache.i_size - flag * 512;
-                if (bytes > 512) bytes = 512;
-                for (t = 0; t < bytes; t++)
-                    printf("%c", ctx.data_buf[t]);
+            {
+                unsigned short total_blocks =
+                    (unsigned short)((ctx.inode_cache.i_size + BLOCK_SIZE - 1)
+                                     / BLOCK_SIZE);
+                for (flag = 0; flag < total_blocks; flag++) {
+                    unsigned short phys = get_file_block(
+                        ctx.dir_cache[k].inode, flag, 0);
+                    if (phys == 0) break;
+                    data_read(phys);
+                    unsigned short bytes =
+                        (unsigned short)(ctx.inode_cache.i_size - flag * 512);
+                    if (bytes > 512) bytes = 512;
+                    for (t = 0; t < bytes; t++)
+                        printf("%c", ctx.data_buf[t]);
+                }
+                if (flag == 0)
+                    printf("The file %s is empty!\n", name);
+                else
+                    printf("\n");
             }
-            if (flag == 0)
-                printf("The file %s is empty!\n", name);
-            else
-                printf("\n");
 
             /* 更新访问时间 */
-            ctx.inode_cache.i_atime = (unsigned long)time(NULL);
+            ctx.inode_cache.i_atime = (unsigned int)time(NULL);
             inode_write(ctx.dir_cache[k].inode);
         } else {
             printf("The file %s has not been opened!\n", name);
@@ -271,39 +387,43 @@ void file_write(const char *name)
             if (length % 512) need_blocks++;
 
             if (need_blocks < 9) {
-                if (ctx.inode_cache.i_blocks <= need_blocks) {
-                    while (ctx.inode_cache.i_blocks < need_blocks) {
-                        ctx.inode_cache.i_block[ctx.inode_cache.i_blocks] = balloc();
-                        ctx.inode_cache.i_blocks++;
-                    }
-                } else {
-                    while (ctx.inode_cache.i_blocks > need_blocks) {
-                        bfree(ctx.inode_cache.i_block[ctx.inode_cache.i_blocks - 1]);
-                        ctx.inode_cache.i_blocks--;
+                unsigned short ino = ctx.dir_cache[k].inode;
+                /* 释放多余块（如果文件之前更大） */
+                {
+                    unsigned short old_total =
+                        (unsigned short)((ctx.inode_cache.i_size + BLOCK_SIZE - 1)
+                                         / BLOCK_SIZE);
+                    while (old_total > need_blocks) {
+                        old_total--;
+                        unsigned short phys = get_file_block(ino, old_total, 0);
+                        if (phys) bfree(phys);
                     }
                 }
+                /* 分配/写入块 */
                 j = 0;
                 while (j < need_blocks) {
+                    unsigned short phys = get_file_block(ino, j, 1);
                     if (j != need_blocks - 1) {
-                        data_read(ctx.inode_cache.i_block[j]);
-                        memcpy(ctx.data_buf, ctx.write_buf + j * BLOCK_SIZE, BLOCK_SIZE);
-                        data_write(ctx.inode_cache.i_block[j]);
+                        data_read(phys);
+                        memcpy(ctx.data_buf, ctx.write_buf + j * BLOCK_SIZE,
+                               BLOCK_SIZE);
+                        data_write(phys);
                     } else {
-                        data_read(ctx.inode_cache.i_block[j]);
+                        data_read(phys);
                         memcpy(ctx.data_buf, ctx.write_buf + j * BLOCK_SIZE,
                                length - j * BLOCK_SIZE);
                         ctx.inode_cache.i_size = length;
-                        data_write(ctx.inode_cache.i_block[j]);
+                        data_write(phys);
                     }
                     j++;
                 }
                 /* 更新修改时间和 inode 变更时间 */
                 {
                     time_t now = time(NULL);
-                    ctx.inode_cache.i_mtime = (unsigned long)now;
-                    ctx.inode_cache.i_ctime = (unsigned long)now;
+                    ctx.inode_cache.i_mtime = (unsigned int)now;
+                    ctx.inode_cache.i_ctime = (unsigned int)now;
                 }
-                inode_write(ctx.dir_cache[k].inode);
+                inode_write(ino);
             } else {
                 printf("Sorry,the max size of a file is 4KB!\n");
             }
@@ -368,8 +488,8 @@ void rmdir(const char *tmp)
         /* 目录内容变更 — 更新目录的 mtime / ctime */
         {
             time_t now = time(NULL);
-            ctx.inode_cache.i_mtime = (unsigned long)now;
-            ctx.inode_cache.i_ctime = (unsigned long)now;
+            ctx.inode_cache.i_mtime = (unsigned int)now;
+            ctx.inode_cache.i_ctime = (unsigned int)now;
         }
 
         inode_write(ctx.current_dir);
@@ -492,8 +612,8 @@ void mv(const char *src, const char *dst)
 
         {
             time_t now = time(NULL);
-            ctx.inode_cache.i_mtime = (unsigned long)now;
-            ctx.inode_cache.i_ctime = (unsigned long)now;
+            ctx.inode_cache.i_mtime = (unsigned int)now;
+            ctx.inode_cache.i_ctime = (unsigned int)now;
         }
         inode_write(ctx.current_dir);
     }
@@ -555,17 +675,8 @@ void mv(const char *src, const char *dst)
         {
             unsigned short ov_ino, ov_blk, ov_ent;
             if (dir_lookup(final_name, 1, &ov_ino, &ov_blk, &ov_ent)) {
-                /* 释放旧文件的块 */
                 inode_read(ov_ino);
-                {
-                    unsigned short m = 0;
-                    while (m < ctx.inode_cache.i_blocks)
-                        bfree(ctx.inode_cache.i_block[m++]);
-                }
-                ctx.inode_cache.i_blocks = 0;
-                ctx.inode_cache.i_size  = 0;
-                ctx.inode_cache.i_dtime = (unsigned long)time(NULL);
-                inode_write(ov_ino);
+                free_file_blocks(ov_ino);
                 ifree(ov_ino);
 
                 /* 从父目录中删除该条目 */
@@ -576,8 +687,8 @@ void mv(const char *src, const char *dst)
                 ctx.inode_cache.i_size -= 16;
                 {
                     time_t now = time(NULL);
-                    ctx.inode_cache.i_mtime = (unsigned long)now;
-                    ctx.inode_cache.i_ctime = (unsigned long)now;
+                    ctx.inode_cache.i_mtime = (unsigned int)now;
+                    ctx.inode_cache.i_ctime = (unsigned int)now;
                 }
                 inode_write(ctx.current_dir);
             }
@@ -634,8 +745,8 @@ void mv(const char *src, const char *dst)
             ctx.inode_cache.i_size += 16;
             {
                 time_t now = time(NULL);
-                ctx.inode_cache.i_mtime = (unsigned long)now;
-                ctx.inode_cache.i_ctime = (unsigned long)now;
+                ctx.inode_cache.i_mtime = (unsigned int)now;
+                ctx.inode_cache.i_ctime = (unsigned int)now;
             }
             inode_write(ctx.current_dir);
 
@@ -674,7 +785,7 @@ void cp(const char *src, const char *dst)
     char saved_path[256];
     unsigned short src_ino, src_block, src_entry;
     unsigned short src_mode;
-    unsigned long src_size, src_blocks;
+    unsigned int src_size;
     const char *src_name;                    /* 源文件名，供阶段 2 复用 */
 
     /* ---- 保存当前状态 ---- */
@@ -719,12 +830,13 @@ void cp(const char *src, const char *dst)
         inode_read(src_ino);
         src_mode   = ctx.inode_cache.i_mode;
         src_size   = ctx.inode_cache.i_size;
-        src_blocks = ctx.inode_cache.i_blocks;
 
         if (src_size > 0) {
-            unsigned short b;
-            for (b = 0; b < src_blocks; b++) {
-                data_read(ctx.inode_cache.i_block[b]);
+            unsigned short b, total;
+            total = (unsigned short)((src_size + BLOCK_SIZE - 1) / BLOCK_SIZE);
+            for (b = 0; b < total; b++) {
+                unsigned short phys = get_file_block(src_ino, b, 0);
+                data_read(phys);
                 memcpy(ctx.write_buf + b * BLOCK_SIZE,
                        ctx.data_buf, BLOCK_SIZE);
             }
@@ -785,15 +897,7 @@ void cp(const char *src, const char *dst)
             unsigned short ov_ino, ov_blk, ov_ent;
             if (dir_lookup(final_name, 1, &ov_ino, &ov_blk, &ov_ent)) {
                 inode_read(ov_ino);
-                {
-                    unsigned short m = 0;
-                    while (m < ctx.inode_cache.i_blocks)
-                        bfree(ctx.inode_cache.i_block[m++]);
-                }
-                ctx.inode_cache.i_blocks = 0;
-                ctx.inode_cache.i_size  = 0;
-                ctx.inode_cache.i_dtime = (unsigned long)time(NULL);
-                inode_write(ov_ino);
+                free_file_blocks(ov_ino);
                 ifree(ov_ino);
 
                 inode_read(ctx.current_dir);
@@ -803,8 +907,8 @@ void cp(const char *src, const char *dst)
                 ctx.inode_cache.i_size -= 16;
                 {
                     time_t now = time(NULL);
-                    ctx.inode_cache.i_mtime = (unsigned long)now;
-                    ctx.inode_cache.i_ctime = (unsigned long)now;
+                    ctx.inode_cache.i_mtime = (unsigned int)now;
+                    ctx.inode_cache.i_ctime = (unsigned int)now;
                 }
                 inode_write(ctx.current_dir);
             }
@@ -840,32 +944,25 @@ void cp(const char *src, const char *dst)
 
             if (src_size > 0) {
                 unsigned short need_blocks, b;
-                unsigned long remaining;
+                unsigned int remaining;
 
-                need_blocks = (unsigned short)(src_size / BLOCK_SIZE);
-                if (src_size % BLOCK_SIZE) need_blocks++;
+                need_blocks = (unsigned short)((src_size + BLOCK_SIZE - 1)
+                                               / BLOCK_SIZE);
+                ctx.inode_cache.i_size = src_size;
 
-                /* 分配数据块 */
-                for (b = 0; b < need_blocks; b++) {
-                    ctx.inode_cache.i_block[b] = balloc();
-                }
-                ctx.inode_cache.i_blocks = need_blocks;
-                ctx.inode_cache.i_size   = src_size;
-
-                /* 写入数据 */
                 remaining = src_size;
                 for (b = 0; b < need_blocks; b++) {
+                    unsigned short phys = get_file_block(new_ino, b, 1);
                     unsigned short chunk = (remaining > BLOCK_SIZE)
                                            ? BLOCK_SIZE
                                            : (unsigned short)remaining;
-                    data_read(ctx.inode_cache.i_block[b]);
+                    data_read(phys);
                     memcpy(ctx.data_buf,
                            ctx.write_buf + b * BLOCK_SIZE, chunk);
-                    data_write(ctx.inode_cache.i_block[b]);
+                    data_write(phys);
                     remaining -= chunk;
                 }
             } else {
-                /* 空文件 */
                 ctx.inode_cache.i_blocks = 0;
                 ctx.inode_cache.i_size   = 0;
             }
@@ -873,9 +970,9 @@ void cp(const char *src, const char *dst)
             /* 时间戳 — 新文件使用当前时间 */
             {
                 time_t now = time(NULL);
-                ctx.inode_cache.i_atime = (unsigned long)now;
-                ctx.inode_cache.i_mtime = (unsigned long)now;
-                ctx.inode_cache.i_ctime = (unsigned long)now;
+                ctx.inode_cache.i_atime = (unsigned int)now;
+                ctx.inode_cache.i_mtime = (unsigned int)now;
+                ctx.inode_cache.i_ctime = (unsigned int)now;
             }
 
             inode_write(new_ino);

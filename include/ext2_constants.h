@@ -60,6 +60,13 @@
 #define DEFAULT_DIR_MODE   0755   /* rwxr-xr-x */
 #define DEFAULT_FILE_MODE  0644   /* rw-r--r-- */
 
+/* ---- 间接块寻址 ---- */
+#define DIRECT_BLOCKS      12     /* i_block[0..11] 直接块 */
+#define INDIRECT_PTRS      256    /* 每间接块可存指针数 (512B / 2B) */
+#define SINGLE_INDIRECT    12     /* i_block[12] 一级间接块索引 */
+#define DOUBLE_INDIRECT    13     /* i_block[13] 二级间接块索引 */
+#define TRIPLE_INDIRECT    14     /* i_block[14] 三级间接块索引 */
+
 /* 从 i_mode 提取权限类型：owner / group / other */
 #define PERM_OWNER(mode, bit)  ((mode) & (bit))
 #define PERM_GROUP(mode, bit)  ((mode) & ((bit) >> 3))

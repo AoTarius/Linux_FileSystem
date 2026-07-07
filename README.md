@@ -107,6 +107,8 @@ User: root  (uid=0, gid=0)
 volume name       : EXT2FS
 disk size         : 4612(blocks)
 blocks per group  : 4612(blocks)
+free blocks       : 4081
+free inodes       : 4091
 ext2 file size    : 2306(kb)
 block size        : 512(kb)
 [root@/]# quit
@@ -126,7 +128,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 - **块大小 / Block size**: 512 bytes
 - **总块数 / Total blocks**: 4612 (~2.3 MB)
 - **数据块数 / Data blocks**: 4096
-- **最大文件 / Max file size**: 4 KB (8 direct blocks × 512 bytes)
+- **最大文件 / Max file size**: 134 KB (12 direct + 256 single-indirect × 512 bytes)
 - **最大 inode 数 / Max inodes**: 4096
 - **最大文件名 / Max filename length**: 8 字符
 
@@ -136,7 +138,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 |--------|------|------|
 | `super_block` | 32B | 卷名、磁盘大小、块大小 |
 | `group_desc` | 32B | 位图位置、空闲块/inode 计数 |
-| `inode` | 64B | 文件类型、权限、大小、时间戳、直接块指针(最多8个) |
+| `inode` | 64B | 文件类型、权限、大小、时间戳、i_block[15]: 12直接+1间接+1双间接+1三间接 |
 | `dir_entry` | 16B | inode 号、文件名、文件类型(1=文件, 2=目录) |
 
 ## 文件结构 / File Structure
@@ -185,6 +187,8 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | 11 | `sleep()` 函数声明但无实现 | **Phase 3 移除**（不再声明） |
 | 12 | 不支持多级路径 (`cd t1/t2`、`mkdir t3/t4` 无效) | ✅ 已修复 — 新增 `dir_navigate()` 多级导航引擎，`cd`/`mkdir`/`touch` 支持路径分隔 |
 | 13 | 缺少 `cp` / `mv` 命令 | ✅ 已实现 — `mv` 支持文件/目录移动+改名+`. .`修正；`cp` 支持文件复制+覆盖 |
+| 14 | 超级块缺少空闲计数 | ✅ 已实现 — `sb_free_blocks_count` / `sb_free_inodes_count` 与位图分配同步 |
+| 15 | 无间接块寻址（最大文件 4KB） | ✅ 已实现 — 12 直接 + 1 级间接（256 指针），最大文件 134KB；`unsigned long`→`unsigned int` 修复 64 位对齐 |
 
 ### 仍存在的问题 / Remaining Issues
 
@@ -208,8 +212,8 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | ~~🔴 P0~~ | ~~**用户信息持久化**~~ | ~~在磁盘上模拟 `/etc/passwd` 和 `/etc/shadow`，初始化时创建默认 root 用户~~ ✅ 已完成 | `context.c`、`src/user.c` | 中 |
 | ~~🟡 P1~~ | ~~**ls 列出物理地址**~~ | ~~`ls()` 输出增加一列，显示文件数据块在磁盘上的块号~~ | ~~`directory.c:dir_list()`~~ | ~~小~~ ✅ 已完成 |
 | ~~🟡 P1~~ | ~~**时间戳更新**~~ | ~~引入 `<time.h>`，在读写/创建时更新 `i_atime`/`i_mtime`/`i_ctime`~~ | ~~`file_ops.c`、`directory.c`~~ | ~~小~~ ✅ 已完成 |
-| 🟠 P2 | **间接块寻址** | `i_block[8]` → `i_block[15]`（12 直接 + 1 间接 + 1 双间接 + 1 三间接） | `ext2_types.h`、`bitmap.c`、`file_ops.c` | 大 |
-| 🟠 P2 | **超级块添加空闲计数** | `super_block` 增加 `sb_free_blocks_count` / `sb_free_inodes_count` | `ext2_types.h`、`context.c` | 小 |
+| ~~🟠 P2~~ | ~~**间接块寻址**~~ | ~~`i_block[8]` → `i_block[15]`（12 直接 + 1 间接 + 1 双间接 + 1 三间接）~~ → ✅ 已完成：`get_file_block()` / `free_file_blocks()` 实现，`unsigned long`→`unsigned int` 修复 64 位对齐 | `ext2_types.h`、`file_ops.c` | ~~大~~ ✅ |
+| ~~🟠 P2~~ | ~~**超级块添加空闲计数**~~ | ~~`super_block` 增加 `sb_free_blocks_count` / `sb_free_inodes_count`~~ → ✅ 已完成：新增 2 字段（padding 10→6），`balloc/bfree/ialloc/ifree` 同步更新，`ckdisk` 展示 | `ext2_types.h`、`bitmap.c`、`context.c` | ~~小~~ ✅ |
 
 ### 第二阶段：补全 ext2 固有功能
 

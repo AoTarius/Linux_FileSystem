@@ -3,11 +3,13 @@
 
 struct super_block // 32 B
 {
-    char sb_volume_name[16];       // 文件系统名
-    unsigned short sb_disk_size;   // 磁盘总大小
+    char sb_volume_name[16];            // 文件系统名
+    unsigned short sb_disk_size;        // 磁盘总大小
     unsigned short sb_blocks_per_group; // 每组中的块数
     unsigned short sb_size_per_block;   // 块大小
-    char sb_pad[10];               // 填充
+    unsigned short sb_free_blocks_count; // 空闲块总数
+    unsigned short sb_free_inodes_count; // 空闲 inode 总数
+    char sb_pad[6];                     // 填充
 };
 
 struct group_desc // 32 B
@@ -25,18 +27,18 @@ struct group_desc // 32 B
 struct inode // 64 B
 {
     unsigned short i_mode;         // 文件类型及访问权限
-    unsigned short i_blocks;       // 文件占用的数据块数(0~7), 最大为7
+    unsigned short i_blocks;       // 文件占用的数据块数
     unsigned short i_uid;          // 文件拥有者标识号
     unsigned short i_gid;          // 文件用户组标识号
     unsigned short i_links_count;  // 文件硬链接计数
     unsigned short i_flags;        // 打开文件的方式
-    unsigned long i_size;          // 文件或目录大小(单位 byte)
-    unsigned long i_atime;         // 访问时间
-    unsigned long i_ctime;         // 创建时间
-    unsigned long i_mtime;         // 修改时间
-    unsigned long i_dtime;         // 删除时间
-    unsigned short i_block[8];     // 直接块寻址方式 指向数据块号
-    char i_pad[24];                // 填充(0xff)
+    unsigned int i_size;           // 文件或目录大小(单位 byte)
+    unsigned int i_atime;          // 访问时间
+    unsigned int i_ctime;          // 创建时间
+    unsigned int i_mtime;          // 修改时间
+    unsigned int i_dtime;          // 删除时间
+    unsigned short i_block[15];    // 块指针: [0..11]直接 [12]一级间接 [13]二级 [14]三级
+    char i_pad[2];                 // 填充(0xff)
 };
 
 struct dir_entry // 16B

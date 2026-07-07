@@ -35,6 +35,8 @@ unsigned short balloc(void)
     block_bmp_write();
     ctx.gd.bg_free_blocks_count--;
     gd_write();
+    ctx.sb.sb_free_blocks_count--;
+    sb_write();
     return ctx.last_alloc_block;
 }
 
@@ -57,6 +59,8 @@ void bfree(unsigned short block_no)
     block_bmp_write();
     ctx.gd.bg_free_blocks_count++;
     gd_write();
+    ctx.sb.sb_free_blocks_count++;
+    sb_write();
 }
 
 /* ---- inode 分配 ---- */
@@ -86,6 +90,8 @@ unsigned short ialloc(void)
     inode_bmp_write();
     ctx.gd.bg_free_inodes_count--;
     gd_write();
+    ctx.sb.sb_free_inodes_count--;
+    sb_write();
     return ctx.last_alloc_inode;
 }
 
@@ -108,4 +114,6 @@ void ifree(unsigned short inode_no)
     inode_bmp_write();
     ctx.gd.bg_free_inodes_count++;
     gd_write();
+    ctx.sb.sb_free_inodes_count++;
+    sb_write();
 }
