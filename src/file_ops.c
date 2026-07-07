@@ -3,6 +3,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "fs_context.h"
@@ -11,6 +12,7 @@
 #include "bitmap.h"
 #include "directory.h"
 #include "file_ops.h"
+#include "user.h"
 
 /*
  * 权限检查 — 基于 uid/gid 的 user/group/other 三级判断。
@@ -980,6 +982,144 @@ void cp(const char *src, const char *dst)
     }
 
 restore:
+    ctx.current_dir = saved_dir;
+    strcpy(ctx.current_path, saved_path);
+}
+
+/* ================================================================
+ * chmod — 修改文件权限
+ *
+ * 用法: chmod <八进制模式> <路径>
+ * 示例: chmod 755 file   chmod 644 dir1/f1
+ * ================================================================ */
+
+void chmod(const char *mode_str, const char *path)
+{
+    unsigned short new_mode, saved_dir, ino, blk, ent;
+    char saved_path[256];
+    char path_buf[256];
+    const char *name;
+    char *endptr;
+
+    /* 解析八进制权限 */
+    new_mode = (unsigned short)strtol(mode_str, &endptr, 8);
+    if (*endptr != '\0' || new_mode > 07777) {
+        printf("chmod: invalid mode: %s\n", mode_str);
+        return;
+    }
+
+    /* 保存状态 */
+    saved_dir = ctx.current_dir;
+    strcpy(saved_path, ctx.current_path);
+
+    /* 解析路径 → 父目录 + 文件名 */
+    strcpy(path_buf, path);
+    {
+        char *slash = strrchr(path_buf, '/');
+        if (slash) {
+            *slash = '\0';
+            if (path_buf[0] == '\0') {
+                ctx.current_dir = 1;
+            } else if (dir_navigate(path_buf) != 0) {
+                printf("chmod: cannot access '%s': "
+                       "No such file or directory\n", path);
+                goto chmod_restore;
+            }
+            name = slash + 1;
+        } else {
+            name = path_buf;
+        }
+    }
+
+    /* 查找文件（先文件，再目录） */
+    if (!dir_lookup(name, 1, &ino, &blk, &ent) &&
+        !dir_lookup(name, 2, &ino, &blk, &ent)) {
+        printf("chmod: cannot access '%s': "
+               "No such file or directory\n", path);
+        goto chmod_restore;
+    }
+
+    /* 权限检查：root 或文件所有者才可 chmod */
+    inode_read(ino);
+    if (ctx.current_uid != 0 && ctx.current_uid != ctx.inode_cache.i_uid) {
+        printf("chmod: permission denied\n");
+        goto chmod_restore;
+    }
+
+    ctx.inode_cache.i_mode = new_mode;
+    ctx.inode_cache.i_ctime = (unsigned int)time(NULL);
+    inode_write(ino);
+
+chmod_restore:
+    ctx.current_dir = saved_dir;
+    strcpy(ctx.current_path, saved_path);
+}
+
+/* ================================================================
+ * chown — 修改文件所有者
+ *
+ * 用法: chown <用户名> <路径>
+ * 示例: chown alice file   chown root dir1/f1
+ * ================================================================ */
+
+void chown(const char *user_str, const char *path)
+{
+    unsigned short new_uid, new_gid, saved_dir, ino, blk, ent;
+    char saved_path[256];
+    char path_buf[256];
+    const char *name;
+
+    /* 查找用户 */
+    if (user_find_by_name(user_str, &new_uid, &new_gid) != 0) {
+        printf("chown: invalid user: '%s'\n", user_str);
+        return;
+    }
+
+    /* 保存状态 */
+    saved_dir = ctx.current_dir;
+    strcpy(saved_path, ctx.current_path);
+
+    /* 解析路径 */
+    strcpy(path_buf, path);
+    {
+        char *slash = strrchr(path_buf, '/');
+        if (slash) {
+            *slash = '\0';
+            if (path_buf[0] == '\0') {
+                ctx.current_dir = 1;
+            } else if (dir_navigate(path_buf) != 0) {
+                printf("chown: cannot access '%s': "
+                       "No such file or directory\n", path);
+                goto chown_restore;
+            }
+            name = slash + 1;
+        } else {
+            name = path_buf;
+        }
+    }
+
+    /* 查找文件 */
+    if (!dir_lookup(name, 1, &ino, &blk, &ent) &&
+        !dir_lookup(name, 2, &ino, &blk, &ent)) {
+        printf("chown: cannot access '%s': "
+               "No such file or directory\n", path);
+        goto chown_restore;
+    }
+
+    /* 权限检查：仅 root 可 chown */
+    if (ctx.current_uid != 0) {
+        printf("chown: permission denied\n");
+        goto chown_restore;
+    }
+
+    /* 改属主 */
+    inode_read(ino);
+    ctx.inode_cache.i_uid  = new_uid;
+    ctx.inode_cache.i_gid  = new_gid;
+    ctx.inode_cache.i_ctime = (unsigned int)time(NULL);
+    inode_write(ino);
+
+chown_restore:
     ctx.current_dir = saved_dir;
     strcpy(ctx.current_path, saved_path);
 }

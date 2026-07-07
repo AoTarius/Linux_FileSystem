@@ -45,6 +45,12 @@ void shell_run(void)
         } else if (!strcmp(command, "cp")) {
             scanf("%s %s", temp, temp2);
             cp(temp, temp2);
+        } else if (!strcmp(command, "chmod")) {
+            scanf("%s %s", temp, temp2);
+            chmod(temp, temp2);
+        } else if (!strcmp(command, "chown")) {
+            scanf("%s %s", temp, temp2);
+            chown(temp, temp2);
         } else if (!strcmp(command, "open")) {
             scanf("%s", temp);
             open_file(temp);

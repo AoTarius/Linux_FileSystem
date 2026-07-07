@@ -15,6 +15,7 @@
 #include "disk_io.h"
 #include "bitmap.h"
 #include "directory.h"
+#include "user.h"
 
 /* ---- 目录查找 ---- */
 
@@ -170,8 +171,8 @@ void dir_list(void)
     char block_str[32], time_str[16], mode_str[10];
 
     /* 表头 — 全部左对齐，列宽与 body 一致 */
-    printf("%-15s %-15s %-10s %-18s %-16s %-12s\n",
-           "items", "type", "mode", "blocks", "mtime", "size");
+    printf("%-15s %-8s %-15s %-10s %-18s %-16s %-12s\n",
+           "items", "owner", "type", "mode", "blocks", "mtime", "size");
 
     inode_read(ctx.current_dir);
     for (i = 0; i < ctx.inode_cache.i_blocks; i++) {
@@ -199,8 +200,10 @@ void dir_list(void)
                         sprintf(size_str, "%u bytes",
                                 (unsigned int)ctx.inode_cache.i_size);
 
-                    printf("%-15s %-15s %-10s %-18s %-16s %-12s\n",
-                           ctx.dir_cache[k].name, "<DIR>",
+                    printf("%-15s %-8s %-15s %-10s %-18s %-16s %-12s\n",
+                           ctx.dir_cache[k].name,
+                           user_name_by_uid(ctx.inode_cache.i_uid),
+                           "<DIR>",
                            mode_str, block_str, time_str, size_str);
                 }
             } else if (ctx.dir_cache[k].file_type == 1) {
@@ -218,8 +221,10 @@ void dir_list(void)
                     sprintf(size_str, "%u bytes",
                             (unsigned int)ctx.inode_cache.i_size);
 
-                    printf("%-15s %-15s %-10s %-18s %-16s %-12s\n",
-                           ctx.dir_cache[k].name, "<FILE>",
+                    printf("%-15s %-8s %-15s %-10s %-18s %-16s %-12s\n",
+                           ctx.dir_cache[k].name,
+                           user_name_by_uid(ctx.inode_cache.i_uid),
+                           "<FILE>",
                            mode_str, block_str, time_str, size_str);
                 }
             }

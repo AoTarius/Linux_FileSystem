@@ -61,6 +61,8 @@ Welcome, root!
 | `touch` | `touch <路径>` | 创建普通文件，支持路径 |
 | `cp` | `cp <源> <目标>` | 复制文件（跨目录、覆盖、仅普通文件） |
 | `mv` | `mv <源> <目标>` | 移动/重命名文件或目录（跨目录、覆盖、修正 `..`） |
+| `chmod` | `chmod <八进制> <路径>` | 修改文件权限 (如 `chmod 755 file`) |
+| `chown` | `chown <用户> <路径>` | 修改文件所有者 (如 `chown alice file`) |
 | `open` | `open <文件名>` | 打开文件 (读写前必须执行) |
 | `close` | `close <文件名>` | 关闭文件 |
 | `read` | `read <文件名>` | 读取文件内容 |
@@ -90,16 +92,16 @@ Hello World!#
 [root@/docs/]# cp readme.txt ../backup/readme.txt
 [root@/docs/]# mv readme.txt guide.txt
 [root@/docs/]# ls
-items           type            mode       blocks             mtime            size
-.               <DIR>           rwxr-xr-x  525                07-07 09:15:31           ----
-..              <DIR>           rwxr-xr-x  524                07-07 09:15:31           ----
-guide.txt       <FILE>          rw-r--r--  526                07-07 09:15:31             12 bytes
+items           owner    type            mode       blocks             mtime            size
+.               root     <DIR>           rwxr-xr-x  525                07-07 09:15:31           ----
+..              root     <DIR>           rwxr-xr-x  524                07-07 09:15:31           ----
+guide.txt       root     <FILE>          rw-r--r--  526                07-07 09:15:31             12 bytes
 [root@/docs/]# cd ../backup
 [root@/backup/]# ls
-items           type            mode       blocks             mtime            size
-.               <DIR>           rwxr-xr-x  528                07-07 09:15:31           ----
-..              <DIR>           rwxr-xr-x  524                07-07 09:15:31           ----
-readme.txt      <FILE>          rw-r--r--  529                07-07 09:15:31             12 bytes
+items           owner    type            mode       blocks             mtime            size
+.               root     <DIR>           rwxr-xr-x  528                07-07 09:15:31           ----
+..              root     <DIR>           rwxr-xr-x  524                07-07 09:15:31           ----
+readme.txt      root     <FILE>          rw-r--r--  529                07-07 09:15:31             12 bytes
 [root@/backup/]# cd ~
 [root@/]# whoami
 User: root  (uid=0, gid=0)
@@ -189,6 +191,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | 13 | 缺少 `cp` / `mv` 命令 | ✅ 已实现 — `mv` 支持文件/目录移动+改名+`. .`修正；`cp` 支持文件复制+覆盖 |
 | 14 | 超级块缺少空闲计数 | ✅ 已实现 — `sb_free_blocks_count` / `sb_free_inodes_count` 与位图分配同步 |
 | 15 | 无间接块寻址（最大文件 4KB） | ✅ 已实现 — 12 直接 + 1 级间接（256 指针），最大文件 134KB；`unsigned long`→`unsigned int` 修复 64 位对齐 |
+| 16 | 缺少 `chmod` / `chown` 命令 | ✅ 已实现 — `chmod` 支持八进制模式，`chown` 查 user_db 获取 uid/gid |
 
 ### 仍存在的问题 / Remaining Issues
 
@@ -222,7 +225,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | **多块组支持** | 当前仅 1 个块组，需支持多块组（独立 GDT 副本和位图） | `ext2_types.h`、`disk_io.c`、`context.c` | 大 |
 | ~~**完整权限系统**~~ | ~~`i_mode` 实现 user/group/other 三级 `rwxrwxrwx` 共 9 位~~ | ~~`file_ops.c`、`directory.c`~~ | ~~中~~ ✅ 已完成 |
 | **硬链接** | `i_links_count` 字段已定义未使用，实现 `ln` 命令 | `file_ops.c`、`directory.c` | 中 |
-| **chmod / chown 命令** | 修改文件的权限位和所有者 | `file_ops.c` | 中 |
+| ~~**chmod / chown 命令**~~ | ~~修改文件的权限位和所有者~~ → ✅ 已完成：`chmod` 八进制设置 i_mode，`chown` 查 user_db 设置 i_uid/i_gid | `file_ops.c`、`user.c` | ~~中~~ ✅ |
 | ~~**绝对路径 & 多级路径**~~ | ~~支持 `mkdir /home/user/docs`、`cd /home` 等~~ → ✅ 已完成：`dir_navigate()` 实现多级导航，`cd`、`mkdir`、`touch` 支持 `~/` 绝对路径和 `a/b/c` 相对路径 | `directory.c`、`file_ops.c` | ~~中~~ ✅ |
 | **文件追加写模式** | `write` 增加 `>>` 追加模式 | `file_ops.c:file_write()` | 小 |
 | ~~**cp / mv 命令**~~ | ~~文件复制和移动（跨目录）~~ → ✅ 已完成：`mv` 支持文件/目录移动+重命名+`..`修正；`cp` 支持文件复制+覆盖，uid/gid 归属当前用户 | `file_ops.c` | ~~中~~ ✅ |

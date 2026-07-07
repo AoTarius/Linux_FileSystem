@@ -37,6 +37,9 @@ int  user_login(void);             /* 交互式登录认证 */
 int  user_auth(const char *name, const char *pass);  /* 验证用户名密码 */
 int  user_add(const char *name, const char *pass);   /* 添加新用户 (root only) */
 int  user_passwd(const char *oldpass, const char *newpass); /* 修改当前用户密码 */
+int  user_find_by_name(const char *name, unsigned short *uid,
+                       unsigned short *gid);         /* 按用户名查找 uid/gid */
+const char *user_name_by_uid(unsigned short uid);    /* 按 uid 反查用户名 */
 void user_init_default(void);      /* 初始化默认 root 用户 */
 
 #endif /* _USER_H */

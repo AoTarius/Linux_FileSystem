@@ -297,3 +297,29 @@ int user_passwd(const char *oldpass, const char *newpass)
     printf("Password changed successfully.\n");
     return 0;
 }
+
+/* ---- 按用户名查找 uid/gid ---- */
+int user_find_by_name(const char *name, unsigned short *uid,
+                      unsigned short *gid)
+{
+    int i;
+    for (i = 0; i < user_count; i++) {
+        if (!strcmp(user_db[i].username, name)) {
+            *uid = user_db[i].uid;
+            *gid = user_db[i].gid;
+            return 0;
+        }
+    }
+    return -1;  /* 未找到 */
+}
+
+/* ---- 按 uid 反查用户名 ---- */
+const char *user_name_by_uid(unsigned short uid)
+{
+    int i;
+    for (i = 0; i < user_count; i++) {
+        if (user_db[i].uid == uid)
+            return user_db[i].username;
+    }
+    return "?";  /* 未找到 */
+}

@@ -24,6 +24,8 @@ void read_file(const char *tmp);
 void write_file(const char *tmp);
 void mv(const char *src, const char *dst);
 void cp(const char *src, const char *dst);
+void chmod(const char *mode_str, const char *path);
+void chown(const char *user_str, const char *path);
 
 /* 其他 */
 void help(void);
