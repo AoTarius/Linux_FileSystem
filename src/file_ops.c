@@ -354,6 +354,63 @@ void file_read(const char *name)
     }
 }
 
+/* ---- cat — 读取并打印文件全部内容（自动 open/close） ---- */
+
+void file_cat(const char *name)
+{
+    unsigned short i, j, k, t, fd_idx;
+    unsigned short total_blocks, block_idx;
+    int need_close = 0;
+
+    if (!dir_lookup(name, 1, &i, &j, &k)) {
+        printf("cat: %s: No such file or directory\n", name);
+        return;
+    }
+
+    /* 如果文件未打开，临时打开 */
+    if (!file_is_open(ctx.dir_cache[k].inode)) {
+        fd_idx = 0;
+        while (ctx.fopen_table[fd_idx]) fd_idx++;
+        ctx.fopen_table[fd_idx] = ctx.dir_cache[k].inode;
+        need_close = 1;
+    }
+
+    inode_read(ctx.dir_cache[k].inode);
+    if (!check_read_perm(ctx.inode_cache.i_mode,
+                         ctx.inode_cache.i_uid,
+                         ctx.inode_cache.i_gid)) {
+        printf("cat: %s: Permission denied\n", name);
+        goto cleanup;
+    }
+
+    total_blocks = (unsigned short)((ctx.inode_cache.i_size + BLOCK_SIZE - 1)
+                                     / BLOCK_SIZE);
+    for (block_idx = 0; block_idx < total_blocks; block_idx++) {
+        unsigned short phys = get_file_block(
+            ctx.dir_cache[k].inode, block_idx, 0);
+        if (phys == 0) break;
+        data_read(phys);
+        unsigned short bytes =
+            (unsigned short)(ctx.inode_cache.i_size - block_idx * 512);
+        if (bytes > 512) bytes = 512;
+        for (t = 0; t < bytes; t++)
+            printf("%c", ctx.data_buf[t]);
+    }
+    if (block_idx > 0)
+        printf("\n");
+
+    /* 更新访问时间 */
+    ctx.inode_cache.i_atime = (unsigned int)time(NULL);
+    inode_write(ctx.dir_cache[k].inode);
+
+cleanup:
+    if (need_close) {
+        fd_idx = 0;
+        while (ctx.fopen_table[fd_idx] != ctx.dir_cache[k].inode) fd_idx++;
+        ctx.fopen_table[fd_idx] = 0;
+    }
+}
+
 /* ---- 写入文件（覆盖写） ---- */
 
 void file_write(const char *name)
@@ -591,4 +648,5 @@ void open_file(const char *tmp)           { file_open(tmp); }
 void close_file(const char *tmp)          { file_close(tmp); }
 void read_file(const char *tmp)           { file_read(tmp); }
 void write_file(const char *tmp)          { file_write(tmp); }
+void cat(const char *tmp)                 { file_cat(tmp); }
 void ls(void)                             { dir_list(); }

@@ -33,6 +33,9 @@ void shell_run(void)
         } else if (!strcmp(command, "touch")) {
             scanf("%s", temp);
             touch(temp, 1);
+        } else if (!strcmp(command, "cat")) {
+            scanf("%s", temp);
+            cat(temp);
         } else if (!strcmp(command, "rmdir")) {
             scanf("%s", temp);
             rmdir(temp);
