@@ -3,5 +3,5 @@ output/
 obj/
 .DS_Store
 .vscode/
-CLAUDE.md
+# CLAUDE.md
 ./claude
