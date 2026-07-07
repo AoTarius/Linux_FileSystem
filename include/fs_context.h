@@ -53,5 +53,6 @@ void fs_shutdown(void);
 const char *get_current_path(void);
 void check_disk(void);
 void format(void);
+void volname(const char *new_name);
 
 #endif // _FS_CONTEXT_H

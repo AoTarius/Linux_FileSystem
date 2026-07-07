@@ -72,6 +72,7 @@ Welcome, root!
 | `rmdir` | `rmdir <目录名>` | 删除空目录 |
 | `format` | `format` | 格式化磁盘 (清除所有数据) |
 | `ckdisk` | `ckdisk` | 查看磁盘状态 |
+| `volname` | `volname [新名称]` | 读取或修改文件系统卷标 |
 | `whoami` | `whoami` | 查看当前登录用户信息 |
 | `useradd` | `useradd <用户名>` | 创建新用户 (仅限 root) |
 | `passwd` | `passwd` | 修改当前用户密码 |
@@ -235,7 +236,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | **文件追加写模式** | `write` 增加 `>>` 追加模式 | `file_ops.c:file_write()` | 小 |
 | ~~**cp / mv 命令**~~ | ~~文件复制和移动（跨目录）~~ → ✅ 已完成：`mv` 支持文件/目录移动+重命名+`..`修正；`cp` 支持文件复制+覆盖，uid/gid 归属当前用户 | `file_ops.c` | ~~中~~ ✅ |
 | **目录项变长支持** | 利用 `rec_len` 支持变长文件名（>8 字符） | `ext2_types.h`、`directory.c` | 中 |
-| **卷标读写** | 增加 `volname` 命令读/写卷标 | `context.c` | 小 |
+| ~~**卷标读写**~~ | ~~增加 `volname` 命令读/写卷标~~ → ✅ 已完成 | `context.c` | ~~小~~ ✅ |
 
 ### 第三阶段：体验与健壮性改进
 

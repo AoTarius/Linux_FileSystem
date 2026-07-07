@@ -186,9 +186,9 @@ int fs_init(void)
         need_init = 1;
     } else {
         sb_read();
-        if (strcmp(ctx.sb.sb_volume_name, VOLUME_NAME)) {
-            printf("The File system [%s] is not suppoted yet!\n",
-                   ctx.sb.sb_volume_name);
+        /* 校验文件系统结构（卷标可由用户修改，改用块大小校验） */
+        if (ctx.sb.sb_size_per_block != BLOCK_SIZE) {
+            printf("The File system has invalid block size!\n");
             printf("The File system loaded error!\n");
             fclose(ctx.fp);
             fs_mkfs();
@@ -242,6 +242,30 @@ void check_disk(void)
     printf("ext2 file size    : %d(kb)\n",
            ctx.sb.sb_disk_size * ctx.sb.sb_size_per_block / 1024);
     printf("block size        : %d(kb)\n", ctx.sb.sb_size_per_block);
+}
+
+/* ---- 卷标读写 ---- */
+
+void volname(const char *new_name)
+{
+    if (new_name == NULL || new_name[0] == '\0') {
+        /* 读取并显示当前卷标 */
+        sb_read();
+        printf("Volume name: %s\n", ctx.sb.sb_volume_name);
+    } else {
+        /* 设置新卷标（同步更新超级块和组描述符） */
+        sb_read();
+        gd_read();
+        strncpy(ctx.sb.sb_volume_name, new_name,
+                sizeof(ctx.sb.sb_volume_name) - 1);
+        ctx.sb.sb_volume_name[sizeof(ctx.sb.sb_volume_name) - 1] = '\0';
+        strncpy(ctx.gd.bg_volume_name, ctx.sb.sb_volume_name,
+                sizeof(ctx.gd.bg_volume_name) - 1);
+        ctx.gd.bg_volume_name[sizeof(ctx.gd.bg_volume_name) - 1] = '\0';
+        sb_write();
+        gd_write();
+        printf("Volume name set to: %s\n", ctx.sb.sb_volume_name);
+    }
 }
 
 /* ---- 格式化 ---- */

@@ -80,6 +80,16 @@ void shell_run(void)
                 printf("Format Disk canceled\n");
         } else if (!strcmp(command, "ckdisk")) {
             check_disk();
+        } else if (!strcmp(command, "volname")) {
+            int c = getchar();
+            if (c == '\n') {
+                ungetc(c, stdin);
+                volname(NULL);
+            } else {
+                ungetc(c, stdin);
+                scanf("%15s", temp);
+                volname(temp);
+            }
         } else if (!strcmp(command, "whoami")) {
             printf("User: %s  (uid=%d, gid=%d)\n",
                    ctx.current_user, ctx.current_uid, ctx.current_gid);
