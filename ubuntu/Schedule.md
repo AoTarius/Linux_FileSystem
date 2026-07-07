@@ -45,6 +45,7 @@
 
 - **你的 Ubuntu 内核：v7.0.0**，属于最新版，`mount_bdev` 已被彻底移除
 - **已修复**：`super.c` 改用 `fs_context` API（`init_fs_context` → `get_tree_bdev` → `fill_super`）
+- **已修复**：`fill_super` 签名从 `(sb, void *data, int silent)` 改为 `(sb, struct fs_context *fc)`
 - **已确认兼容**：`iterate_shared`、`struct mnt_idmap *idmap` 在 v7.x 中保持不变
 - 如果后续在其他内核版本上编译仍有问题，对照 CLAUDE.md §0 的 API 兼容表排查
 

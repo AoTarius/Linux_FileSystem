@@ -13,6 +13,8 @@
 #include <linux/statfs.h>
 #include "ext2_sim_disk.h"
 
+struct fs_context;  /* 前置声明（避免循环依赖） */
+
 /* ═══════════════════════════════════════════════════════════
  *  磁盘几何常量
  * ═══════════════════════════════════════════════════════════ */
@@ -156,7 +158,7 @@ int ext2_sim_readdir(struct file *filp, struct dir_context *ctx);
 int ext2_sim_getattr(struct mnt_idmap *idmap, const struct path *path,
                      struct kstat *stat, u32 request_mask,
                      unsigned int query_flags);
-int ext2_sim_fill_super(struct super_block *sb, void *data, int silent);
+int ext2_sim_fill_super(struct super_block *sb, struct fs_context *fc);
 void ext2_sim_put_super(struct super_block *sb);
 int ext2_sim_statfs(struct dentry *dentry, struct kstatfs *buf);
 

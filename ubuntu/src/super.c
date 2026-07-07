@@ -66,9 +66,10 @@ module_exit(ext2_sim_exit);
 
 /* ── fill_super — 挂载入口（TODO：CLAUDE.md § 4.1.1）────── */
 
-int ext2_sim_fill_super(struct super_block *sb, void *data, int silent)
+int ext2_sim_fill_super(struct super_block *sb, struct fs_context *fc)
 {
     /* TODO: Phase 2 */
+    /* silent flag: fc->sb_flags & SB_SILENT */
     printk(KERN_ERR "ext2sim: fill_super not implemented\n");
     return -EINVAL;
 }

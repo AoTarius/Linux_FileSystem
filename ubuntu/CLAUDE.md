@@ -227,9 +227,11 @@ ubuntu/
 
 ### 4.1 super.c — 挂载与卸载
 
-#### 4.1.1 `ext2_sim_fill_super(struct super_block *sb, void *data, int silent)`
+#### 4.1.1 `ext2_sim_fill_super(struct super_block *sb, struct fs_context *fc)`
 
 **职责**：内核执行 `mount -t ext2sim` 时调用。从块设备读取超级块，验证合法性，构建 VFS super_block。
+
+> **v7.x 签名变更**：第二个参数从 `void *data, int silent` 改为 `struct fs_context *fc`。静默标志通过 `fc->sb_flags & SB_SILENT` 获取。
 
 **处理流程**：
 1. `sb_bread(sb, 0)` 读取超级块
