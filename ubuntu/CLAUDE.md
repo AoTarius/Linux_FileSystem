@@ -7,7 +7,7 @@
 
 ## 〇、内核版本与 API 兼容性
 
-> **本规格书基于 Linux 内核 v6.18.37 的 VFS API 编写，所有函数签名已与内核源码交叉验证（见 `fs/ext2/super.c`、`fs/ext2/inode.c`、`fs/ext2/balloc.c`、`fs/ext2/namei.c`、`fs/ext2/dir.c`、`fs/ext2/file.c`、`include/linux/fs.h`）。**
+> **本规格书经内核 v7.0.0 实测编译验证。关键 API 差异已从内核源码（`include/linux/fs.h`）交叉确认。**
 
 ### 0.1 关键 API 选择
 
@@ -20,7 +20,15 @@
 | `inode_operations->lookup` 返回值 | **使用 `d_splice_alias()`** | 处理目录别名，新内核标准做法（替代旧式 `d_add`） |
 | `super_operations->write_inode` | 返回 `int`（非 `void`） | 新内核签名变更 |
 | `super_operations->free_inode` | **使用**（非 `->destroy_inode`） | `destroy_inode` 已废弃，由 `free_inode` 替代 |
-| `mount_bdev()` 包装 | **已移除**（v7.x） | 使用 `fs_context` + `get_tree_bdev()` 替代（见 §4.1） |
+| `mount_bdev()` / `.mount` 字段 | **已移除**（v5.4+） | 使用 `fs_context` + `get_tree_bdev()` + `.init_fs_context` 替代 |
+| `fill_super` 签名 | `(sb, struct fs_context *fc)` | 旧签名 `(sb, void *data, int silent)` 已废弃（v5.4+） |
+| `iget_locked` 后 `I_NEW` 检测 | **`inode_state_read_once(inode) & I_NEW`** | v7.x 中 `i_state` 变为 `struct inode_state_flags`（成员 `__state`），**禁止** `inode->i_state & I_NEW` |
+| inode 时间戳写入 | **`inode_set_atime/mtime/ctime()`** | v7.x 中 `inode->i_atime` 等字段已移除，必须用 setter |
+| inode 链接数写入 | **`set_nlink(inode, n)`** | v7.x 中 `inode->i_links_count` 已移除 |
+| `kstatfs.f_fsid` 赋值 | **`buf->f_fsid.val[0] = val[1] = 0`** | v7.x 是 `struct { int val[2]; }`，不能 `{0,0}` 赋值 |
+| `mkdir` 返回值 | **`struct dentry *`**（非 `int`） | v7.x 独有变更：`create` 仍返回 `int` |
+| `statfs` 返回值类型 | `int` |
+| `dir_emit` / `generic_read_dir` | **使用** |
 
 ### 0.2 需要加入 `struct mnt_idmap *idmap` 参数的回调
 
@@ -29,7 +37,7 @@
 | 回调 | 完整签名 |
 |------|---------|
 | `create` | `int (*create)(struct mnt_idmap *, struct inode *, struct dentry *, umode_t, bool)` |
-| `mkdir` | `int (*mkdir)(struct mnt_idmap *, struct inode *, struct dentry *, umode_t)` |
+| `mkdir` | `struct dentry *(*mkdir)(struct mnt_idmap *, struct inode *, struct dentry *, umode_t)` |
 | `getattr` | `int (*getattr)(struct mnt_idmap *, const struct path *, struct kstat *, u32, unsigned int)` |
 
 以下回调**不需要** `idmap` 参数（签名为旧式）：
@@ -39,6 +47,109 @@
 | `unlink` | `int (*unlink)(struct inode *, struct dentry *)` |
 | `rmdir` | `int (*rmdir)(struct inode *, struct dentry *)` |
 | `lookup` | `struct dentry *(*lookup)(struct inode *, struct dentry *, unsigned int)` |
+
+### 0.3 v7.x 实测踩坑记录（新增）
+
+> 以下差异是在 Ubuntu 虚拟机内核 **v7.0.0** 上逐条编译报错后，对照内核源码 `include/linux/fs.h` 确认的。本节省略猜测过程，直接给出正确写法。
+
+#### 0.3.1 `inode->i_state` 判断 `I_NEW`
+
+```c
+// ❌ v6.x 及之前
+if (!(inode->i_state & I_NEW)) return inode;
+
+// ❌ v7.x 尝试（编译错误：.flags / .state 不存在）
+if (!(inode->i_state.flags & I_NEW)) ...
+if (!(inode->i_state.state & I_NEW)) ...
+
+// ✅ v7.x 正确（内核 struct inode_state_flags { enum __state; }）
+if (!(inode_state_read_once(inode) & I_NEW))
+    return inode;
+```
+
+**原理**：v7.x 中 `i_state` 从 `unsigned long` 变为 `struct inode_state_flags`，成员是 `enum inode_state_flags_enum __state`。内核提供 `inode_state_read_once()` / `inode_state_read()` accessor。`I_NEW` 仍可用，是同一个枚举值。
+
+#### 0.3.2 inode 时间戳写入
+
+```c
+// ❌ v6.x 及之前
+inode->i_atime.tv_sec = ...; inode->i_atime.tv_nsec = 0;
+inode->i_mtime.tv_sec = ...; inode->i_mtime.tv_nsec = 0;
+inode->i_ctime.tv_sec = ...; inode->i_ctime.tv_nsec = 0;
+
+// ❌ 尝试 __i_atime（同样编译错误）
+inode->__i_atime.tv_sec = ...;
+
+// ✅ v7.x 正确
+inode_set_atime(inode, sec, 0);
+inode_set_mtime(inode, sec, 0);
+inode_set_ctime(inode, sec, 0);
+```
+
+#### 0.3.3 inode 链接数写入
+
+```c
+// ❌ v6.x
+inode->i_links_count = n;
+
+// ✅ v7.x
+set_nlink(inode, n);
+```
+
+#### 0.3.4 `mkdir` 返回值类型
+
+```c
+// ❌ v6.x 签名
+int ext2_sim_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+                   struct dentry *dentry, umode_t mode);
+
+// ✅ v7.x 签名（注意返回值是 struct dentry *）
+struct dentry *ext2_sim_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+                               struct dentry *dentry, umode_t mode);
+```
+
+**注意**：只有 `mkdir` 改了返回类型，`create` 仍返回 `int`。
+
+#### 0.3.5 `kstatfs.f_fsid` 赋值
+
+```c
+// ❌ 错误
+buf->f_fsid = { 0, 0 };
+buf->f_fsid = 0;
+
+// ✅ v7.x 正确（__kernel_fsid_t 是 struct { int val[2]; }）
+buf->f_fsid.val[0] = 0;
+buf->f_fsid.val[1] = 0;
+```
+
+#### 0.3.6 挂载入口：`mount_bdev` → `fs_context`
+
+```c
+// ❌ 旧式（v5.4+ 编译错误：implicit declaration）
+static struct dentry *ext2_sim_mount(...) { return mount_bdev(...); }
+struct file_system_type fs = { .mount = ext2_sim_mount, .kill_sb = ... };
+
+// ✅ 新式
+static int ext2_sim_get_tree(struct fs_context *fc)
+    { return get_tree_bdev(fc, ext2_sim_fill_super); }
+static const struct fs_context_operations ops = { .get_tree = ext2_sim_get_tree };
+static int ext2_sim_init_fs_context(struct fs_context *fc)
+    { fc->ops = &ops; return 0; }
+struct file_system_type fs = {
+    .init_fs_context = ext2_sim_init_fs_context,
+    .kill_sb         = kill_block_super,
+};
+```
+
+#### 0.3.7 `fill_super` 签名
+
+```c
+// ❌ 旧式
+int ext2_sim_fill_super(struct super_block *sb, void *data, int silent);
+
+// ✅ 新式（silent 标志通过 fc->sb_flags & SB_SILENT 获取）
+int ext2_sim_fill_super(struct super_block *sb, struct fs_context *fc);
+```
 
 ---
 
@@ -548,18 +659,19 @@ static inline struct ext2_sim_inode_info *EXT2_SIM_I(struct inode *inode) {
 
 **处理流程**：
 1. `iget_locked(sb, ino)` — 内核自动查缓存 / 分配
-2. 若是新分配的 inode（`(inode->i_state & I_NEW)`）：
+2. 若是新分配的 inode（v7.x: `inode_state_read_once(inode) & I_NEW`）：
    - 计算 inode 所在块和偏移：`block = EXT2_SIM_INODE_BLOCK(ino)`, `offset = EXT2_SIM_INODE_OFFSET(ino)`
-   - `bh = sb_bread(sb, block)`，从 `bh->b_data + offset` 拷贝 64 字节
+   - `bh = sb_bread(sb, block)`，从 `bh->b_data + offset` 读取磁盘 inode
    - 填充 VFS inode：
      - `inode->i_mode = le16_to_cpu(raw->i_mode)`
-     - `inode->i_uid = make_kuid(&init_user_ns, le16_to_cpu(raw->i_uid))`
-     - `inode->i_gid = make_kgid(&init_user_ns, le16_to_cpu(raw->i_gid))`
+     - `i_uid_write(inode, le16_to_cpu(raw->i_uid))`
+     - `i_gid_write(inode, le16_to_cpu(raw->i_gid))`
      - `inode->i_size = le32_to_cpu(raw->i_size)`
-     - `inode->i_atime = le32_to_cpu(raw->i_atime)` 等
      - `inode->i_blocks = le16_to_cpu(raw->i_blocks)`
-     - 若 `S_ISDIR(inode->i_mode)`：`inode->i_op = &ext2_sim_dir_inops`，`inode->i_fop = &ext2_sim_dir_fops`
-     - 若 `S_ISREG(inode->i_mode)`：`inode->i_op = &ext2_sim_file_inops`，`inode->i_fop = &ext2_sim_file_fops`
+     - **v7.x**: `inode_set_atime(inode, sec, 0)`, `inode_set_mtime()`, `inode_set_ctime()`
+     - **v7.x**: `set_nlink(inode, le16_to_cpu(raw->i_links_count))`
+     - 若 `S_ISDIR(inode->i_mode)`：`inode->i_op = &ext2_sim_dir_inode_operations`，`inode->i_fop = &ext2_sim_dir_file_operations`
+     - 若 `S_ISREG(inode->i_mode)`：`inode->i_op = &ext2_sim_file_inode_operations`，`inode->i_fop = &ext2_sim_file_file_operations`
    - `brelse(bh)`
    - `unlock_new_inode(inode)`
 3. 返回 inode
@@ -592,11 +704,11 @@ static inline struct ext2_sim_inode_info *EXT2_SIM_I(struct inode *inode) {
 4. `return d_splice_alias(inode, dentry)` — **使用 `d_splice_alias()`，不是 `d_add()`**
    - 新内核中 `d_splice_alias` 统一处理了 NULL inode（相当于 `d_add(dentry, NULL)`）和非 NULL inode（含目录别名检测）
 
-#### 4.5.4 `ext2_sim_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, bool excl)`
+#### 4.5.4 `int ext2_sim_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, bool excl)`
 
-**职责**：`touch /mnt/ext2/newfile` 或 `open(..., O_CREAT)` 时调用。
+**职责**：`touch /mnt/ext2/newfile` 或 `open(..., O_CREAT)` 时调用。**返回 `int`**。
 
-**注意**：新内核签名的第一个参数是 `struct mnt_idmap *idmap`，需传递给 `inode_init_owner()`。
+**注意**：新内核签名的第一个参数是 `struct mnt_idmap *idmap`，需传递给 `inode_init_owner()`。在 v7.x 中创建 dentry 的方式有变化，见下文。
 
 **处理流程**：
 1. `ino = ext2_sim_ialloc(dir->i_sb)` — 分配新 inode
@@ -613,11 +725,11 @@ static inline struct ext2_sim_inode_info *EXT2_SIM_I(struct inode *inode) {
 6. `d_instantiate_new(dentry, inode)` — **新内核推荐 `d_instantiate_new`（自动处理 inode 引用计数）**
 7. 返回 0
 
-#### 4.5.5 `ext2_sim_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode)`
+#### 4.5.5 `struct dentry *ext2_sim_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode)`
 
-**职责**：`mkdir /mnt/ext2/newdir` 时调用。
+**职责**：`mkdir /mnt/ext2/newdir` 时调用。**v7.x 中返回值改为 `struct dentry *`（非 `int`）**。
 
-**注意**：新内核签名的第一个参数是 `struct mnt_idmap *idmap`。
+**注意**：第一个参数是 `struct mnt_idmap *idmap`。返回 `ERR_PTR(-errno)` 表示失败，返回 dentry 表示成功。
 
 **处理流程**：
 1. `ino = ext2_sim_ialloc(dir->i_sb)`
@@ -628,16 +740,12 @@ static inline struct ext2_sim_inode_info *EXT2_SIM_I(struct inode *inode) {
    - `i_size = 32`（`.` 和 `..` 两条目）
    - `i_blocks = 1`
    - `i_block[0] = blk`
-4. 初始化目录块：
-   - `bh = sb_bread(sb, 516 + blk)`
-   - 条目 0：`.` → inode = ino, name_len = 0, file_type = 2
-   - 条目 1：`..` → inode = dir->i_ino, name_len = 0, file_type = 2
-   - 其余 30 条目的 inode 置 0
-   - `mark_buffer_dirty(bh)`, `brelse(bh)`
+4. 初始化目录块（同上）
 5. 递增组描述符的 `bg_used_dirs_count`
 6. `ext2_sim_dir_add_entry(dir, name, namelen, ino, EXT2_SIM_FT_DIR)`
 7. `inode = ext2_sim_iget(dir->i_sb, ino)`
-8. `d_instantiate_new(dentry, inode)` — 使用 `d_instantiate_new` 而非 `d_instantiate`
+8. `d_instantiate_new(dentry, inode)`
+9. **返回 dentry**（不是 0）
 
 #### 4.5.6 `ext2_sim_unlink(struct inode *dir, struct dentry *dentry)`
 
@@ -672,24 +780,26 @@ static inline struct ext2_sim_inode_info *EXT2_SIM_I(struct inode *inode) {
 #### 4.5.8 操作结构体
 
 ```c
-static struct inode_operations ext2_sim_file_inops = {
+// 普通文件 inode 操作
+static struct inode_operations ext2_sim_file_inode_operations = {
     .getattr    = ext2_sim_getattr,
-    // 普通文件只需要 getattr；lookup/create/unlink/mkdir/rmdir 属于目录操作
 };
 
-static struct inode_operations ext2_sim_dir_inops = {
+// 目录 inode 操作
+static struct inode_operations ext2_sim_dir_inode_operations = {
     .lookup     = ext2_sim_lookup,     // lookup 不需要 idmap
-    .create     = ext2_sim_create,     // 第一个参数 idmap
-    .unlink     = ext2_sim_unlink,     // 不需要 idmap 参数
-    .mkdir      = ext2_sim_mkdir,      // 第一个参数 idmap
-    .rmdir      = ext2_sim_rmdir,      // 不需要 idmap 参数
-    .getattr    = ext2_sim_getattr,    // 第一个参数 idmap
+    .create     = ext2_sim_create,     // int (*)(idmap, dir, dentry, mode, excl)
+    .unlink     = ext2_sim_unlink,     // int (*)(dir, dentry) — 不需要 idmap
+    .mkdir      = ext2_sim_mkdir,      // struct dentry *(*)(idmap, dir, dentry, mode)
+    .rmdir      = ext2_sim_rmdir,      // int (*)(dir, dentry) — 不需要 idmap
+    .getattr    = ext2_sim_getattr,    // int (*)(idmap, path, stat, mask, flags)
 };
 ```
 
 > **关键区别**：
 > - `create` / `mkdir` / `getattr` → 第一个参数是 `struct mnt_idmap *idmap`
 > - `unlink` / `rmdir` / `lookup` → **不需要** `idmap` 参数
+> - **v7.x**: `create` 返回 `int`，`mkdir` 返回 `struct dentry *`
 > - `create`/`mkdir`/`unlink`/`rmdir` 挂到**目录**的 `i_op` 上（操作发生在父目录中）
 > - 普通文件的 `i_op` 只需要 `getattr`
 
@@ -800,21 +910,26 @@ static struct inode_operations ext2_sim_dir_inops = {
 #### 4.6.6 操作结构体
 
 ```c
-static struct file_operations ext2_sim_file_fops = {
-    .read       = ext2_sim_file_read,
-    .write      = ext2_sim_file_write,
-    .llseek     = generic_file_llseek,
+// 普通文件 file_operations
+static struct file_operations ext2_sim_file_file_operations = {
+    .llseek   = generic_file_llseek,
+    .read     = ext2_sim_file_read,
+    .write    = ext2_sim_file_write,
 };
 
-static struct file_operations ext2_sim_dir_fops = {
-    .iterate_shared = ext2_sim_readdir,   // 注意：必须用 iterate_shared，不是 iterate
+// 目录 file_operations
+static struct file_operations ext2_sim_dir_file_operations = {
     .llseek         = generic_file_llseek,
+    .read           = generic_read_dir,        // 让 read() 对目录返回 -EISDIR
+    .iterate_shared = ext2_sim_readdir,        // 注意：必须用 iterate_shared
 };
 ```
 
 > **`iterate_shared` vs `iterate`**：Linux 5.x+ 已将 `file_operations->iterate` 替换为 `->iterate_shared`。旧内核的 `->iterate` 成员已不存在于结构体定义中。使用 `->iterate` 将导致**编译错误**。
 >
 > **`read` vs `read_iter`**：使用传统的 `.read`/`.write`（`char __user *buf` 风格）而非新的 `read_iter`/`write_iter`（`struct kiocb *` + `struct iov_iter *`），因为我们不接入内核的 address_space 页缓存，传统 API 更简单且仍完全支持。
+>
+> **`generic_read_dir`**：目录的 `.read` 必须设为 `generic_read_dir`，否则对目录执行 `read()` 会导致内核 oops。
 
 ---
 
@@ -1052,4 +1167,8 @@ cd /mnt/ext2/d                path_lookup → lookup() → ext2_sim_lookup()    
 
 ---
 
-> **你（Claude on Linux）现在已拥有实现此模块所需的全部规格信息。按第八章的顺序逐步实现，每完成一步编译验证。遇到内核 API 不确定时，查阅 `/lib/modules/$(uname -r)/build/include/linux/` 下的头文件。**
+> **你（Claude on Linux）现在已拥有实现此模块所需的全部规格信息。按第八章的顺序逐步实现，每完成一步编译验证。**
+>
+> **v7.x 内核 API 速查**：遇到 `inode->i_state` / 时间戳 / 链接数 / `mkdir` 返回值相关编译错误时，**直接查阅上方 §0.3 的踩坑记录**，不要自行猜测字段名。
+>
+> **其他内核 API 不确定时**：查阅 `/lib/modules/$(uname -r)/build/include/linux/fs.h`（inode_operations、file_operations、super_operations 结构体定义）和 `include/uapi/linux/statfs.h`（kstatfs 结构体）。
