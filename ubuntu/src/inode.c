@@ -28,8 +28,8 @@ struct inode *ext2_sim_iget(struct super_block *sb, uint16_t ino)
     if (!inode)
         return ERR_PTR(-ENOMEM);
 
-    /* 已在缓存中 → 直接返回（v7.x: i_state 是 struct，字段名 state） */
-    if (!(inode->i_state.state & I_NEW))
+    /* 已在缓存中 → 直接返回（v7.x: i_state 为 struct，用 accessor */
+    if (!(inode_state_read_once(inode) & I_NEW))
         return inode;
 
     /* ── 新分配的 inode：从磁盘填充 ───────────────────── */
@@ -94,11 +94,11 @@ struct dentry *ext2_sim_lookup(struct inode *dir, struct dentry *dentry,
     return NULL;
 }
 
-struct dentry *ext2_sim_create(struct mnt_idmap *idmap, struct inode *dir,
-                                struct dentry *dentry, umode_t mode, bool excl)
+int ext2_sim_create(struct mnt_idmap *idmap, struct inode *dir,
+                    struct dentry *dentry, umode_t mode, bool excl)
 {
     /* TODO: Phase 4 — CLAUDE.md § 4.5.4 */
-    return ERR_PTR(-ENOSYS);
+    return -ENOSYS;
 }
 
 struct dentry *ext2_sim_mkdir(struct mnt_idmap *idmap, struct inode *dir,
