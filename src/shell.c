@@ -10,7 +10,7 @@
 
 void shell_run(void)
 {
-    char command[10], temp[9], temp2[32];
+    char command[10], temp[256], temp2[32];
 
     /* ---- Login ---- */
     if (user_login() != 0) {
@@ -20,7 +20,7 @@ void shell_run(void)
 
     /* ---- Main loop ---- */
     while (1) {
-        printf("[%s@%s]%c", ctx.current_user, get_current_path(),
+        printf("[%s@ %s]%c", ctx.current_user, get_current_path(),
                ctx.current_uid == 0 ? '#' : '$');
         scanf("%s", command);
 

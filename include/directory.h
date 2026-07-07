@@ -21,4 +21,9 @@ int file_is_open(unsigned short ino);
 /* 列出当前目录内容 */
 void dir_list(void);
 
+/* 多级目录导航。
+ * 支持 ~ 绝对路径、相对路径、. 和 .. 组件。
+ * 成功返回 0，失败返回 -1。不打印错误信息（由调用者处理）。 */
+int dir_navigate(const char *path);
+
 #endif // _DIRECTORY_H

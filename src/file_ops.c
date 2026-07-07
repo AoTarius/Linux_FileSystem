@@ -320,7 +320,7 @@ void file_write(const char *name)
  * 放在 file_ops.c 以避免与 directory.c 的循环依赖
  * ================================================================ */
 
-void rmdir(char tmp[9])
+void rmdir(const char *tmp)
 {
     unsigned short i, j, k, flag;
     unsigned short m, n;
@@ -392,7 +392,7 @@ void rmdir(char tmp[9])
                 }
             }
             if (ctx.inode_cache.i_size == 32) {
-                strcpy(ctx.current_path, "/");
+                strcpy(ctx.current_path, "~/");
                 ctx.current_dir = 1;
                 rmdir(tmp);
             }
@@ -402,13 +402,72 @@ void rmdir(char tmp[9])
 
 /* ================================================================
  * 向后兼容包装（保持 main.h 中声明的旧 API 不变）
+ *
+ * mkdir / cat 支持多级路径：mkdir t3/t4 会先进入 t3 再创建 t4。
  * ================================================================ */
 
-void cat(char tmp[9], int type)   { file_create(tmp, type); }
-void mkdir(char tmp[9], int type) { file_create(tmp, type); }
-void del(char tmp[9])             { file_delete(tmp); }
-void open_file(char tmp[9])       { file_open(tmp); }
-void close_file(char tmp[9])      { file_close(tmp); }
-void read_file(char tmp[9])       { file_read(tmp); }
-void write_file(char tmp[9])      { file_write(tmp); }
-void ls(void)                     { dir_list(); }
+/*
+ * 路径感知的文件/目录创建。
+ * 若 path 含 '/' 分隔符，先导航到父目录，创建完毕后再恢复原目录。
+ */
+static void file_create_path(const char *path, int type)
+{
+    char buf[256];
+    char *last_slash;
+    const char *name;
+    unsigned short saved_dir;
+    char saved_path[256];
+
+    strcpy(buf, path);
+    last_slash = strrchr(buf, '/');
+
+    if (last_slash != NULL) {
+        /* 路径含目录分隔符 — 分离父目录与文件名 */
+        *last_slash = '\0';
+        name = last_slash + 1;
+
+        if (name[0] == '\0') {
+            printf("Invalid path: %s\n", path);
+            return;
+        }
+
+        /* 保存当前状态 */
+        saved_dir = ctx.current_dir;
+        strcpy(saved_path, ctx.current_path);
+
+        /* 导航到父目录 */
+        if (buf[0] == '\0') {
+            /* "/name" 形式 — 在根目录创建 */
+            ctx.current_dir = 1;
+            strcpy(ctx.current_path, "~/");
+            ctx.current_dirlen = 0;
+        } else {
+            if (dir_navigate(buf) != 0) {
+                printf("The directory %s not exists!\n", buf);
+                /* 恢复原目录 */
+                ctx.current_dir = saved_dir;
+                strcpy(ctx.current_path, saved_path);
+                return;
+            }
+        }
+
+        /* 在父目录中创建 */
+        file_create(name, type);
+
+        /* 恢复原目录 */
+        ctx.current_dir = saved_dir;
+        strcpy(ctx.current_path, saved_path);
+    } else {
+        /* 单层名称 — 在当前目录创建（原有行为） */
+        file_create(path, type);
+    }
+}
+
+void cat(const char *tmp, int type)       { file_create_path(tmp, type); }
+void mkdir(const char *tmp, int type)     { file_create_path(tmp, type); }
+void del(const char *tmp)                 { file_delete(tmp); }
+void open_file(const char *tmp)           { file_open(tmp); }
+void close_file(const char *tmp)          { file_close(tmp); }
+void read_file(const char *tmp)           { file_read(tmp); }
+void write_file(const char *tmp)          { file_write(tmp); }
+void ls(void)                             { dir_list(); }

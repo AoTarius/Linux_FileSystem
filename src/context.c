@@ -171,7 +171,7 @@ int fs_init(void)
         for (i = 0; i < 16; i++)
             ctx.fopen_table[i] = 0;
     }
-    strcpy(ctx.current_path, "/");
+    strcpy(ctx.current_path, "~/");
     ctx.current_dir = 1;
 
     ctx.fp = fopen("./Ext2", "r+");

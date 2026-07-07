@@ -166,118 +166,190 @@ static void format_time_str(char *out, int maxlen, unsigned long timestamp)
 
 void dir_list(void)
 {
-    unsigned short i, j, k, type_flag;
-    char block_str[32], time_str[16];
-    int blk_len, time_len;
+    unsigned short i, k;
+    char block_str[32], time_str[16], mode_str[10];
 
-    printf("items          type           mode         blocks             mtime            size\n");
+    /* 表头 — 全部左对齐，列宽与 body 一致 */
+    printf("%-15s %-15s %-10s %-18s %-16s %-12s\n",
+           "items", "type", "mode", "blocks", "mtime", "size");
+
     inode_read(ctx.current_dir);
     for (i = 0; i < ctx.inode_cache.i_blocks; i++) {
         dir_read(ctx.inode_cache.i_block[i]);
         for (k = 0; k < 32; k++) {
             if (!ctx.dir_cache[k].inode) continue;
 
-            printf("%s", ctx.dir_cache[k].name);
             if (ctx.dir_cache[k].file_type == 2) {
                 inode_read(ctx.dir_cache[k].inode);
-                j = 0;
-                if (!strcmp(ctx.dir_cache[k].name, "..")) {
-                    while (j++ < 13) printf(" ");
-                    type_flag = 1;
-                } else if (!strcmp(ctx.dir_cache[k].name, ".")) {
-                    while (j++ < 14) printf(" ");
-                    type_flag = 0;
-                } else {
-                    while (j++ < 15 - ctx.dir_cache[k].name_len)
-                        printf(" ");
-                    type_flag = 2;
-                }
-                printf("<DIR>          ");
-                /* ---- 权限列 (9 位 rwxrwxrwx) ---- */
-                {
-                    char mode_str[10];
-                    format_mode_str(mode_str, ctx.inode_cache.i_mode);
-                    printf("%s ", mode_str);
-                }
-                /* ---- 物理地址列 ---- */
+
+                format_mode_str(mode_str, ctx.inode_cache.i_mode);
                 format_block_str(block_str, sizeof(block_str),
                                  ctx.inode_cache.i_block,
                                  ctx.inode_cache.i_blocks);
-                blk_len = (int)strlen(block_str);
-                j = 0;
-                while (j++ < 18 - blk_len) printf(" ");
-                printf("%s", block_str);
-
-                /* ---- 修改时间列 ---- */
                 format_time_str(time_str, sizeof(time_str),
                                 ctx.inode_cache.i_mtime);
-                time_len = (int)strlen(time_str);
-                j = 0;
-                while (j++ < 16 - time_len) printf(" ");
-                printf("%s", time_str);
 
-                if (type_flag != 2)
-                    printf("          ----");
-                else
-                    printf("          %4ld bytes", ctx.inode_cache.i_size);
+                /* . 和 .. 不显示大小 */
+                {
+                    char size_str[16];
+                    if (!strcmp(ctx.dir_cache[k].name, ".") ||
+                        !strcmp(ctx.dir_cache[k].name, ".."))
+                        sprintf(size_str, "----");
+                    else
+                        sprintf(size_str, "%lu bytes",
+                                (unsigned long)ctx.inode_cache.i_size);
+
+                    printf("%-15s %-15s %-10s %-18s %-16s %-12s\n",
+                           ctx.dir_cache[k].name, "<DIR>",
+                           mode_str, block_str, time_str, size_str);
+                }
             } else if (ctx.dir_cache[k].file_type == 1) {
                 inode_read(ctx.dir_cache[k].inode);
-                j = 0;
-                while (j++ < 15 - ctx.dir_cache[k].name_len) printf(" ");
-                printf("<FILE>         ");
-                /* ---- 权限列 (9 位 rwxrwxrwx) ---- */
-                {
-                    char mode_str[10];
-                    format_mode_str(mode_str, ctx.inode_cache.i_mode);
-                    printf("%s ", mode_str);
-                }
-                /* ---- 物理地址列 ---- */
+
+                format_mode_str(mode_str, ctx.inode_cache.i_mode);
                 format_block_str(block_str, sizeof(block_str),
                                  ctx.inode_cache.i_block,
                                  ctx.inode_cache.i_blocks);
-                blk_len = (int)strlen(block_str);
-                j = 0;
-                while (j++ < 18 - blk_len) printf(" ");
-                printf("%s", block_str);
-
-                /* ---- 修改时间列 ---- */
                 format_time_str(time_str, sizeof(time_str),
                                 ctx.inode_cache.i_mtime);
-                time_len = (int)strlen(time_str);
-                j = 0;
-                while (j++ < 16 - time_len) printf(" ");
-                printf("%s", time_str);
 
-                printf("          %4ld bytes", ctx.inode_cache.i_size);
+                {
+                    char size_str[16];
+                    sprintf(size_str, "%lu bytes",
+                            (unsigned long)ctx.inode_cache.i_size);
+
+                    printf("%-15s %-15s %-10s %-18s %-16s %-12s\n",
+                           ctx.dir_cache[k].name, "<FILE>",
+                           mode_str, block_str, time_str, size_str);
+                }
             }
-            printf("\n");
         }
         inode_read(ctx.current_dir);
     }
 }
 
 /* ================================================================
+ * 路径字符串操作（内部辅助）
+ * ================================================================ */
+
+/* 从 ctx.current_path 的末尾剥离最后一个目录组件。
+ * 例: "~/t1/t2/" → "~/t1/" 并更新 ctx.current_dirlen */
+static void path_strip_last(void)
+{
+    int len = (int)strlen(ctx.current_path);
+    if (len <= 2) return;  /* 已经是 "~/" */
+
+    ctx.current_path[len - 1] = '\0';          /* 去掉末尾 '/' */
+    char *slash = strrchr(ctx.current_path, '/');
+    if (slash) {
+        *(slash + 1) = '\0';                   /* 截断到上一个 '/' 之后 */
+        if (slash == ctx.current_path + 1) {
+            ctx.current_dirlen = 0;            /* 回到根目录 */
+        } else {
+            /* 计算父目录名长度 */
+            char *prev = slash - 1;
+            while (prev > ctx.current_path && *prev != '/') prev--;
+            if (*prev == '/') prev++;
+            ctx.current_dirlen = (unsigned short)(slash - prev);
+        }
+    }
+}
+
+/* 向 ctx.current_path 追加一个目录组件。
+ * 例: "~/t1/" + "t2" → "~/t1/t2/" */
+static void path_append(const char *name)
+{
+    strcat(ctx.current_path, name);
+    strcat(ctx.current_path, "/");
+    ctx.current_dirlen = (unsigned short)strlen(name);
+}
+
+/* ================================================================
+ * 多级目录导航
+ * ================================================================ */
+
+/*
+ * 按多级路径导航到目标目录。
+ * 支持 ~ 绝对路径、相对路径、. 和 .. 组件。
+ * 成功返回 0 并更新 ctx.current_dir / ctx.current_path；
+ * 失败返回 -1（ctx 状态未定义，调用者应回滚）。
+ * 不打印错误信息（由调用者负责）。
+ */
+int dir_navigate(const char *path)
+{
+    char buf[256];
+    char *p, *start;
+    unsigned short i, j, k;
+
+    strcpy(buf, path);
+    p = buf;
+
+    /* 处理 ~ 开头的绝对路径 */
+    if (*p == '~') {
+        ctx.current_dir = 1;
+        strcpy(ctx.current_path, "~/");
+        ctx.current_dirlen = 0;
+        p++;
+        if (*p == '/') p++;          /* 跳过 ~/ */
+        if (*p == '\0') return 0;    /* 只有 ~ 或 ~/ → 根目录 */
+    }
+
+    /* 逐组件导航 */
+    while (*p) {
+        /* 跳过前导 '/' */
+        while (*p == '/') p++;
+        if (*p == '\0') break;
+
+        /* 标记当前组件的起始位置 */
+        start = p;
+        while (*p && *p != '/') p++;
+
+        {
+            char saved = *p;
+            *p = '\0';               /* 临时截断为单个组件名 */
+
+            if (!strcmp(start, ".")) {
+                /* 当前目录 — 无操作 */
+            } else if (!strcmp(start, "..")) {
+                if (ctx.current_dir != 1) {
+                    if (dir_lookup("..", 2, &i, &j, &k)) {
+                        ctx.current_dir = i;
+                        path_strip_last();
+                    }
+                }
+            } else {
+                if (dir_lookup(start, 2, &i, &j, &k)) {
+                    ctx.current_dir = i;
+                    path_append(start);
+                } else {
+                    *p = saved;
+                    return -1;       /* 组件未找到 */
+                }
+            }
+
+            *p = saved;              /* 恢复 '/' 或 '\0' */
+        }
+
+        if (*p) p++;                 /* 跳过 '/' 分隔符 */
+    }
+
+    return 0;
+}
+
+/* ================================================================
  * 用户命令：cd
  * ================================================================ */
 
-void cd(char tmp[9])
+void cd(const char *path)
 {
-    unsigned short i, j, k;
+    unsigned short saved_dir = ctx.current_dir;
+    char saved_path[256];
+    strcpy(saved_path, ctx.current_path);
 
-    if (dir_lookup(tmp, 2, &i, &j, &k)) {
-        ctx.current_dir = i;
-        if (!strcmp(tmp, "..") && ctx.dir_cache[k - 1].name_len) {
-            ctx.current_path[strlen(ctx.current_path)
-                - ctx.dir_cache[k - 1].name_len - 1] = '\0';
-            ctx.current_dirlen = ctx.dir_cache[k].name_len;
-        } else if (!strcmp(tmp, ".")) {
-            return;
-        } else if (strcmp(tmp, "..")) {
-            ctx.current_dirlen = strlen(tmp);
-            strcat(ctx.current_path, tmp);
-            strcat(ctx.current_path, "/");
-        }
-    } else {
-        printf("The directory %s not exists!\n", tmp);
+    if (dir_navigate(path) != 0) {
+        /* 导航失败 — 回滚到原始状态 */
+        ctx.current_dir = saved_dir;
+        strcpy(ctx.current_path, saved_path);
+        printf("The directory %s not exists!\n", path);
     }
 }

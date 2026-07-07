@@ -10,18 +10,18 @@
  */
 
 /* 目录操作 */
-void cd(char tmp[9]);
-void mkdir(char tmp[9], int type);
-void rmdir(char tmp[9]);
+void cd(const char *tmp);
+void mkdir(const char *tmp, int type);
+void rmdir(const char *tmp);
 void ls(void);
 
 /* 文件操作 */
-void cat(char tmp[9], int type);
-void del(char tmp[9]);
-void open_file(char tmp[9]);
-void close_file(char tmp[9]);
-void read_file(char tmp[9]);
-void write_file(char tmp[9]);
+void cat(const char *tmp, int type);
+void del(const char *tmp);
+void open_file(const char *tmp);
+void close_file(const char *tmp);
+void read_file(const char *tmp);
+void write_file(const char *tmp);
 
 /* 其他 */
 void help(void);

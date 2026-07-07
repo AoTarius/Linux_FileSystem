@@ -56,8 +56,8 @@ Welcome, root!
 | 命令 | 用法 | 说明 |
 |------|------|------|
 | `ls` | `ls` | 列出当前目录内容（含物理地址和修改时间） |
-| `cd` | `cd <目录名>` | 切换目录 (`.` 当前, `..` 上级) |
-| `mkdir` | `mkdir <目录名>` | 创建目录 |
+| `cd` | `cd <路径>` | 切换目录，支持多级路径 (`cd t1/t2`、`cd ~`) |
+| `mkdir` | `mkdir <路径>` | 创建目录，支持路径 (`mkdir t1/t2` 在 t1 下创建 t2) |
 | `touch` | `touch <文件名>` | 创建普通文件 |
 | `open` | `open <文件名>` | 打开文件 (读写前必须执行) |
 | `close` | `close <文件名>` | 关闭文件 |
@@ -87,10 +87,10 @@ Hello World!
 [root@/docs/]# close readme.txt
 File readme.txt closed!
 [root@/docs/]# ls
-items          type           mode         blocks             mtime            size
-.              <DIR>          rwxr-xr-x         525  07-06 15:49:13          ----
-..             <DIR>          rwxr-xr-x         524  07-06 15:49:13          ----
-readme.txt     <FILE>         rw-r--r--         526  07-06 15:49:13            12 bytes
+items           type            mode       blocks             mtime            size
+.               <DIR>           rwxr-xr-x  525                07-07 09:15:31           ----
+..              <DIR>           rwxr-xr-x  524                07-07 09:15:31           ----
+readme.txt      <FILE>          rw-r--r--  526                07-07 09:15:31             12 bytes
 [root@/docs/]# cd ..
 [root@/]# whoami
 User: root  (uid=0, gid=0)
@@ -174,17 +174,18 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | 9 | `main.c` 末尾 147 行死代码 | **Phase 1 移除** |
 | 10 | 中文注释 GBK 编码 | **已修复为 UTF-8** |
 | 11 | `sleep()` 函数声明但无实现 | **Phase 3 移除**（不再声明） |
+| 12 | 不支持多级路径 (`cd t1/t2`、`mkdir t3/t4` 无效) | ✅ 本次修复 — 新增 `dir_navigate()` 多级导航引擎，`cd`/`mkdir`/`touch` 支持路径分隔 |
 
 ### 仍存在的问题 / Remaining Issues
 
 | # | 严重程度 | 位置 | 问题 |
 |---|----------|------|------|
-| 1 | **高** | `shell.c` | 所有 `scanf("%s",...)` 无缓冲区大小限制 — 输入过长会导致**栈溢出** |
+| 1 | **中** | `shell.c` | `scanf("%s",temp)` 无缓冲区大小限制 — 输入过长会栈溢出。已缓解：`temp` 从 `[9]` 扩大到 `[256]`，但未根本解决（需改用 `fgets`） |
 | 2 | **高** | `shell.c` / `file_ops.c` | `fflush(stdin)` 是 C 标准的**未定义行为** |
 | 3 | **中** | `file_ops.c:rmdir()` | 递归删除时覆盖 `current_path` / `current_dir`，导致非空目录删除失败 |
 | 4 | **低** | `main.h` | `cat()` 实际语义是 `touch`（创建文件），函数名有误导性 |
 | 5 | **低** | — | `help` 命令已声明但未实现 |
-| 6 | **低** | — | 不支持多级路径 (`mkdir /a/b` 无效) |
+| ~~6~~ | ~~**低**~~ | ~~—~~ | ~~不支持多级路径 (`mkdir /a/b` 无效)~~ → ✅ 已修复：`cd`、`mkdir`、`touch` 均支持多级路径 |
 | 7 | **低** | `file_ops.c:file_write()` | 以 `#` 作为输入结束符，文件内容不能包含 `#` |
 
 ## 后续开发计划 / Development Roadmap
@@ -208,7 +209,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | ~~**完整权限系统**~~ | ~~`i_mode` 实现 user/group/other 三级 `rwxrwxrwx` 共 9 位~~ | ~~`file_ops.c`、`directory.c`~~ | ~~中~~ ✅ 已完成 |
 | **硬链接** | `i_links_count` 字段已定义未使用，实现 `ln` 命令 | `file_ops.c`、`directory.c` | 中 |
 | **chmod / chown 命令** | 修改文件的权限位和所有者 | `file_ops.c` | 中 |
-| **绝对路径 & 多级路径** | 支持 `mkdir /home/user/docs`、`cd /home` 等 | `directory.c` | 中 |
+| ~~**绝对路径 & 多级路径**~~ | ~~支持 `mkdir /home/user/docs`、`cd /home` 等~~ → ✅ 已完成：`dir_navigate()` 实现多级导航，`cd`、`mkdir`、`touch` 支持 `~/` 绝对路径和 `a/b/c` 相对路径 | `directory.c`、`file_ops.c` | ~~中~~ ✅ |
 | **文件追加写模式** | `write` 增加 `>>` 追加模式 | `file_ops.c:file_write()` | 小 |
 | **cp / mv 命令** | 文件复制和移动（跨目录） | `file_ops.c` | 中 |
 | **目录项变长支持** | 利用 `rec_len` 支持变长文件名（>8 字符） | `ext2_types.h`、`directory.c` | 中 |
