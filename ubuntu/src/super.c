@@ -363,7 +363,8 @@ int ext2_sim_statfs(struct dentry *dentry, struct kstatfs *buf)
     buf->f_files   = EXT2_SIM_TOTAL_INODES;
     buf->f_ffree   = le16_to_cpu(gd->bg_free_inodes_count);
     buf->f_namelen = EXT2_SIM_NAME_LEN;
-    buf->f_fsid    = 0;
+    buf->f_fsid.val[0] = 0;
+    buf->f_fsid.val[1] = 0;
 
     return 0;
 }
