@@ -401,6 +401,260 @@ void rmdir(const char *tmp)
 }
 
 /* ================================================================
+ * mv — 移动/重命名文件或目录
+ *
+ * 支持的操作：
+ *   mv f1 f2       同目录重命名
+ *   mv f1 dir1/    将 f1 移入目录 dir1（保持原名）
+ *   mv dir1/f1 f2  跨目录移动 + 重命名
+ *   mv dir1  dir2  移动目录（自动修正 .. 条目）
+ *
+ * 不支持：目录移到自身子目录下（无循环检测）
+ * ================================================================ */
+
+void mv(const char *src, const char *dst)
+{
+    char src_buf[256], dst_buf[256];
+    unsigned short saved_dir, src_parent_ino;
+    char saved_path[256];
+    unsigned short src_ino, src_type, src_block, src_entry;
+    const char *src_name;
+
+    /* ---- 保存当前状态（最后恢复） ---- */
+    saved_dir = ctx.current_dir;
+    strcpy(saved_path, ctx.current_path);
+
+    /* ============================================================
+     * 阶段 1：定位并移除源条目
+     * ============================================================ */
+    strcpy(src_buf, src);
+    {
+        char *slash = strrchr(src_buf, '/');
+        if (slash) {
+            *slash = '\0';
+            if (src_buf[0] == '\0') {
+                ctx.current_dir = 1;
+            } else if (dir_navigate(src_buf) != 0) {
+                printf("mv: cannot stat '%s': No such file or directory\n", src);
+                goto restore;
+            }
+            src_name = slash + 1;
+        } else {
+            src_name = src_buf;
+        }
+    }
+
+    /* 在源父目录中查找 */
+    if (dir_lookup(src_name, 2, &src_ino, &src_block, &src_entry)) {
+        src_type = 2;                       /* 目录 */
+    } else if (dir_lookup(src_name, 1, &src_ino, &src_block, &src_entry)) {
+        src_type = 1;                       /* 普通文件 */
+    } else {
+        printf("mv: cannot stat '%s': No such file or directory\n", src);
+        goto restore;
+    }
+
+    if (!strcmp(src_name, ".") || !strcmp(src_name, "..")) {
+        printf("mv: cannot move '%s'\n", src_name);
+        goto restore;
+    }
+
+    src_parent_ino = ctx.current_dir;       /* 记录源父目录，用于 .. 更新判断 */
+
+    /* 从源父目录中移除条目 */
+    {
+        ctx.dir_cache[src_entry].inode = 0;
+        dir_write(ctx.inode_cache.i_block[src_block]);
+
+        ctx.inode_cache.i_size -= 16;
+
+        /* 压缩因删除而全空的数据块（避免碎片） */
+        {
+            unsigned short m = 1;
+            while (m < ctx.inode_cache.i_blocks) {
+                unsigned short n, empty = 0;
+                dir_read(ctx.inode_cache.i_block[m]);
+                for (n = 0; n < 32; n++) {
+                    if (!ctx.dir_cache[n].inode) empty++;
+                }
+                if (empty == 32) {
+                    bfree(ctx.inode_cache.i_block[m]);
+                    ctx.inode_cache.i_blocks--;
+                    while (m < ctx.inode_cache.i_blocks) {
+                        ctx.inode_cache.i_block[m] = ctx.inode_cache.i_block[m + 1];
+                        m++;
+                    }
+                } else {
+                    m++;
+                }
+            }
+        }
+
+        {
+            time_t now = time(NULL);
+            ctx.inode_cache.i_mtime = (unsigned long)now;
+            ctx.inode_cache.i_ctime = (unsigned long)now;
+        }
+        inode_write(ctx.current_dir);
+    }
+
+    /* ============================================================
+     * 阶段 2：确定目标目录与文件名
+     * ============================================================ */
+
+    /* 先恢复到原始目录 — 目标路径从用户视角解析 */
+    ctx.current_dir = saved_dir;
+    strcpy(ctx.current_path, saved_path);
+
+    strcpy(dst_buf, dst);
+    {
+        const char *final_name;
+        const char *name_part;
+        unsigned short dst_parent_ino;
+
+        {
+            char *slash = strrchr(dst_buf, '/');
+            if (slash) {
+                name_part = slash + 1;      /* 先保存 basename，再截断 */
+                *slash = '\0';
+                if (dst_buf[0] == '\0') {
+                    ctx.current_dir = 1;
+                } else if (dir_navigate(dst_buf) != 0) {
+                    printf("mv: cannot create '%s': "
+                           "No such file or directory\n", dst);
+                    goto restore;
+                }
+            } else {
+                name_part = dst_buf;
+            }
+        }
+
+        /* 判断目标名称 */
+        if (name_part[0] == '\0') {
+            /* 路径以 / 结尾（如 mv f1 dir1/）→ 直接移入，保持原名 */
+            final_name = src_name;
+        } else {
+            unsigned short d_ino, d_blk, d_ent;
+            if (dir_lookup(name_part, 2, &d_ino, &d_blk, &d_ent)) {
+                /* 目标是目录 → 将源移入其中，保持原名 */
+                ctx.current_dir = d_ino;
+                final_name = src_name;
+            } else {
+                /* 目标不是目录 → 作为新文件名 */
+                final_name = name_part;
+            }
+        }
+
+        dst_parent_ino = ctx.current_dir;
+
+        /* ============================================================
+         * 阶段 3：处理目标冲突 & 写入新条目
+         * ============================================================ */
+
+        /* 若目标位置已存在同名文件：删除它（覆盖） */
+        {
+            unsigned short ov_ino, ov_blk, ov_ent;
+            if (dir_lookup(final_name, 1, &ov_ino, &ov_blk, &ov_ent)) {
+                /* 释放旧文件的块 */
+                inode_read(ov_ino);
+                {
+                    unsigned short m = 0;
+                    while (m < ctx.inode_cache.i_blocks)
+                        bfree(ctx.inode_cache.i_block[m++]);
+                }
+                ctx.inode_cache.i_blocks = 0;
+                ctx.inode_cache.i_size  = 0;
+                ctx.inode_cache.i_dtime = (unsigned long)time(NULL);
+                inode_write(ov_ino);
+                ifree(ov_ino);
+
+                /* 从父目录中删除该条目 */
+                inode_read(ctx.current_dir);
+                dir_read(ctx.inode_cache.i_block[ov_blk]);
+                ctx.dir_cache[ov_ent].inode = 0;
+                dir_write(ctx.inode_cache.i_block[ov_blk]);
+                ctx.inode_cache.i_size -= 16;
+                {
+                    time_t now = time(NULL);
+                    ctx.inode_cache.i_mtime = (unsigned long)now;
+                    ctx.inode_cache.i_ctime = (unsigned long)now;
+                }
+                inode_write(ctx.current_dir);
+            }
+        }
+
+        /* 检查目标名是否是已存在的目录（不能覆盖目录） */
+        {
+            unsigned short d_ino, d_blk, d_ent;
+            if (dir_lookup(final_name, 2, &d_ino, &d_blk, &d_ent)) {
+                printf("mv: cannot overwrite directory '%s'\n", final_name);
+                goto restore;
+            }
+        }
+
+        /* ---- 在目标目录中插入新条目 ---- */
+        {
+            unsigned short flag = 1, i = 0, j = 0;
+
+            inode_read(ctx.current_dir);
+
+            if (ctx.inode_cache.i_size != ctx.inode_cache.i_blocks * 512) {
+                /* 存在未满的块 — 在其中找空槽 */
+                while (flag && i < ctx.inode_cache.i_blocks) {
+                    dir_read(ctx.inode_cache.i_block[i]);
+                    j = 0;
+                    while (j < 32) {
+                        if (ctx.dir_cache[j].inode == 0) {
+                            flag = 0;
+                            break;
+                        }
+                        j++;
+                    }
+                    i++;
+                }
+                i--;    /* 回退到找到的块 */
+            } else {
+                /* 所有块已满 — 分配新块 */
+                ctx.inode_cache.i_block[ctx.inode_cache.i_blocks] = balloc();
+                ctx.inode_cache.i_blocks++;
+                i = ctx.inode_cache.i_blocks - 1;
+                dir_read(ctx.inode_cache.i_block[i]);
+                j = 0;
+                for (flag = 1; flag < 32; flag++)
+                    ctx.dir_cache[flag].inode = 0;
+            }
+
+            /* 填入条目 — 复用源 inode，更新名称 */
+            ctx.dir_cache[j].inode     = src_ino;
+            ctx.dir_cache[j].name_len  = (unsigned short)strlen(final_name);
+            ctx.dir_cache[j].file_type = (char)src_type;
+            strcpy(ctx.dir_cache[j].name, final_name);
+            dir_write(ctx.inode_cache.i_block[i]);
+
+            ctx.inode_cache.i_size += 16;
+            {
+                time_t now = time(NULL);
+                ctx.inode_cache.i_mtime = (unsigned long)now;
+                ctx.inode_cache.i_ctime = (unsigned long)now;
+            }
+            inode_write(ctx.current_dir);
+
+            /* ---- 目录跨父移动：修正 .. 条目 ---- */
+            if (src_type == 2 && src_parent_ino != dst_parent_ino) {
+                inode_read(src_ino);
+                dir_read(ctx.inode_cache.i_block[0]);
+                ctx.dir_cache[1].inode = dst_parent_ino;
+                dir_write(ctx.inode_cache.i_block[0]);
+            }
+        }
+    }
+
+restore:
+    ctx.current_dir = saved_dir;
+    strcpy(ctx.current_path, saved_path);
+}
+
+/* ================================================================
  * 向后兼容包装（保持 main.h 中声明的旧 API 不变）
  *
  * mkdir / cat 支持多级路径：mkdir t3/t4 会先进入 t3 再创建 t4。

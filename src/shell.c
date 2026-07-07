@@ -10,7 +10,7 @@
 
 void shell_run(void)
 {
-    char command[10], temp[256], temp2[32];
+    char command[10], temp[256], temp2[256];
 
     /* ---- Login ---- */
     if (user_login() != 0) {
@@ -39,6 +39,9 @@ void shell_run(void)
         } else if (!strcmp(command, "rm")) {
             scanf("%s", temp);
             del(temp);
+        } else if (!strcmp(command, "mv")) {
+            scanf("%s %s", temp, temp2);
+            mv(temp, temp2);
         } else if (!strcmp(command, "open")) {
             scanf("%s", temp);
             open_file(temp);

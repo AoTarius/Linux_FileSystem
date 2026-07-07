@@ -22,6 +22,8 @@ void open_file(const char *tmp);
 void close_file(const char *tmp);
 void read_file(const char *tmp);
 void write_file(const char *tmp);
+void mv(const char *src, const char *dst);
+void cp(const char *src, const char *dst);
 
 /* 其他 */
 void help(void);
