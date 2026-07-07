@@ -141,10 +141,10 @@ struct inode *ext2_sim_alloc_inode(struct super_block *sb);
 void          ext2_sim_free_inode(struct inode *inode);
 struct dentry *ext2_sim_lookup(struct inode *dir, struct dentry *dentry,
                                unsigned int flags);
-int ext2_sim_create(struct mnt_idmap *idmap, struct inode *dir,
-                    struct dentry *dentry, umode_t mode, bool excl);
-int ext2_sim_mkdir(struct mnt_idmap *idmap, struct inode *dir,
-                   struct dentry *dentry, umode_t mode);
+struct dentry *ext2_sim_create(struct mnt_idmap *idmap, struct inode *dir,
+                                struct dentry *dentry, umode_t mode, bool excl);
+struct dentry *ext2_sim_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+                               struct dentry *dentry, umode_t mode);
 int ext2_sim_unlink(struct inode *dir, struct dentry *dentry);
 int ext2_sim_rmdir(struct inode *dir, struct dentry *dentry);
 
