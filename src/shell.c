@@ -64,8 +64,14 @@ void shell_run(void)
             scanf("%s", temp);
             read_file(temp);
         } else if (!strcmp(command, "write")) {
-            scanf("%s\n", temp);
-            write_file(temp);
+            scanf("%s", temp);
+            if (!strcmp(temp, ">>")) {
+                scanf("%s ", temp2);
+                append(temp2);
+            } else {
+                scanf(" ");
+                write_file(temp);
+            }
         } else if (!strcmp(command, "ls")) {
             ls();
         } else if (!strcmp(command, "format")) {

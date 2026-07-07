@@ -67,7 +67,8 @@ Welcome, root!
 | `open` | `open <文件名>` | 打开文件 (读写前必须执行) |
 | `close` | `close <文件名>` | 关闭文件 |
 | `read` | `read <文件名>` | 读取文件内容 |
-| `write` | `write <文件名>` | 写入文件 (以 `#` 结束输入) |
+| `write` | `write <文件名>` | 覆盖写入文件 (以 `#` 结束输入) |
+| `write >>` | `write >> <文件名>` | 追加写入文件 (保留原有内容，以 `#` 结束) |
 | `rm` | `rm <文件名>` | 删除文件 |
 | `rmdir` | `rmdir <目录名>` | 删除空目录 |
 | `format` | `format` | 格式化磁盘 (清除所有数据) |
@@ -233,7 +234,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | **硬链接** | `i_links_count` 字段已定义未使用，实现 `ln` 命令 | `file_ops.c`、`directory.c` | 中 |
 | ~~**chmod / chown 命令**~~ | ~~修改文件的权限位和所有者~~ → ✅ 已完成：`chmod` 八进制设置 i_mode，`chown` 查 user_db 设置 i_uid/i_gid | `file_ops.c`、`user.c` | ~~中~~ ✅ |
 | ~~**绝对路径 & 多级路径**~~ | ~~支持 `mkdir /home/user/docs`、`cd /home` 等~~ → ✅ 已完成：`dir_navigate()` 实现多级导航，`cd`、`mkdir`、`touch` 支持 `~/` 绝对路径和 `a/b/c` 相对路径 | `directory.c`、`file_ops.c` | ~~中~~ ✅ |
-| **文件追加写模式** | `write` 增加 `>>` 追加模式 | `file_ops.c:file_write()` | 小 |
+| ~~**文件追加写模式**~~ | ~~增加 `append` 命令，追加写入保留原有内容~~ → ✅ 已完成 | `file_ops.c:file_append()` | ~~小~~ ✅ |
 | ~~**cp / mv 命令**~~ | ~~文件复制和移动（跨目录）~~ → ✅ 已完成：`mv` 支持文件/目录移动+重命名+`..`修正；`cp` 支持文件复制+覆盖，uid/gid 归属当前用户 | `file_ops.c` | ~~中~~ ✅ |
 | **目录项变长支持** | 利用 `rec_len` 支持变长文件名（>8 字符） | `ext2_types.h`、`directory.c` | 中 |
 | ~~**卷标读写**~~ | ~~增加 `volname` 命令读/写卷标~~ → ✅ 已完成 | `context.c` | ~~小~~ ✅ |

@@ -492,6 +492,83 @@ void file_write(const char *name)
     }
 }
 
+/* ---- 追加写入文件（保留原有内容） ---- */
+
+void file_append(const char *name)
+{
+    unsigned short i, j, k, ino;
+    unsigned short size = 0, new_len, old_size;
+    unsigned short first_block, first_offset, buf_pos;
+
+    if (!dir_lookup(name, 1, &i, &j, &k)) {
+        printf("The file %s does not exist!\n", name);
+        return;
+    }
+    if (!file_is_open(ctx.dir_cache[k].inode)) {
+        printf("The file %s has not been opened!\n", name);
+        return;
+    }
+
+    ino = ctx.dir_cache[k].inode;
+    inode_read(ino);
+
+    if (!check_write_perm(ctx.inode_cache.i_mode,
+                          ctx.inode_cache.i_uid,
+                          ctx.inode_cache.i_gid)) {
+        printf("Permission denied: cannot write %s\n", name);
+        return;
+    }
+
+    old_size = (unsigned short)ctx.inode_cache.i_size;
+
+    /* 读入新内容 */
+    fflush(stdin);
+    while (1) {
+        ctx.write_buf[size] = (char)getchar();
+        if (ctx.write_buf[size] == '#') {
+            ctx.write_buf[size] = '\0';
+            break;
+        }
+        if (size >= 4095) {
+            printf("Sorry,the max size of a file is 4KB!\n");
+            break;
+        }
+        size++;
+    }
+    new_len = (unsigned short)strlen(ctx.write_buf);
+
+    /* 追加起点：旧数据末尾 */
+    first_block = old_size / BLOCK_SIZE;
+    first_offset = old_size % BLOCK_SIZE;
+
+    /* 逐块写入新数据 */
+    buf_pos = 0;
+    j = first_block;
+    while (buf_pos < new_len) {
+        unsigned short phys = get_file_block(ino, j, 1);
+        unsigned short copy_start = (j == first_block) ? first_offset : 0;
+        unsigned short space = BLOCK_SIZE - copy_start;
+        unsigned short to_copy = (new_len - buf_pos < space)
+                                 ? (new_len - buf_pos) : space;
+
+        data_read(phys);
+        memcpy(ctx.data_buf + copy_start, ctx.write_buf + buf_pos, to_copy);
+        data_write(phys);
+
+        buf_pos += to_copy;
+        j++;
+    }
+
+    /* 更新 inode */
+    ctx.inode_cache.i_size = old_size + new_len;
+    {
+        time_t now = time(NULL);
+        ctx.inode_cache.i_mtime = (unsigned int)now;
+        ctx.inode_cache.i_ctime = (unsigned int)now;
+    }
+    inode_write(ino);
+}
+
 /* ================================================================
  * 删除目录（含递归删除子项）
  * 放在 file_ops.c 以避免与 directory.c 的循环依赖
@@ -648,5 +725,6 @@ void open_file(const char *tmp)           { file_open(tmp); }
 void close_file(const char *tmp)          { file_close(tmp); }
 void read_file(const char *tmp)           { file_read(tmp); }
 void write_file(const char *tmp)          { file_write(tmp); }
+void append(const char *tmp)              { file_append(tmp); }
 void cat(const char *tmp)                 { file_cat(tmp); }
 void ls(void)                             { dir_list(); }
