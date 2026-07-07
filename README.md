@@ -58,7 +58,9 @@ Welcome, root!
 | `ls` | `ls` | 列出当前目录内容（含物理地址和修改时间） |
 | `cd` | `cd <路径>` | 切换目录，支持多级路径 (`cd t1/t2`、`cd ~`) |
 | `mkdir` | `mkdir <路径>` | 创建目录，支持路径 (`mkdir t1/t2` 在 t1 下创建 t2) |
-| `touch` | `touch <文件名>` | 创建普通文件 |
+| `touch` | `touch <路径>` | 创建普通文件，支持路径 |
+| `cp` | `cp <源> <目标>` | 复制文件（跨目录、覆盖、仅普通文件） |
+| `mv` | `mv <源> <目标>` | 移动/重命名文件或目录（跨目录、覆盖、修正 `..`） |
 | `open` | `open <文件名>` | 打开文件 (读写前必须执行) |
 | `close` | `close <文件名>` | 关闭文件 |
 | `read` | `read <文件名>` | 读取文件内容 |
@@ -77,21 +79,28 @@ Welcome, root!
 
 ```
 [root@/]# mkdir docs
+[root@/]# mkdir backup
+[root@/]# cd docs
 [root@/docs/]# touch readme.txt
 [root@/docs/]# open readme.txt
 File readme.txt opened!
 [root@/docs/]# write readme.txt
 Hello World!#
-[root@/docs/]# read readme.txt
-Hello World!
 [root@/docs/]# close readme.txt
-File readme.txt closed!
+[root@/docs/]# cp readme.txt ../backup/readme.txt
+[root@/docs/]# mv readme.txt guide.txt
 [root@/docs/]# ls
 items           type            mode       blocks             mtime            size
 .               <DIR>           rwxr-xr-x  525                07-07 09:15:31           ----
 ..              <DIR>           rwxr-xr-x  524                07-07 09:15:31           ----
-readme.txt      <FILE>          rw-r--r--  526                07-07 09:15:31             12 bytes
-[root@/docs/]# cd ..
+guide.txt       <FILE>          rw-r--r--  526                07-07 09:15:31             12 bytes
+[root@/docs/]# cd ../backup
+[root@/backup/]# ls
+items           type            mode       blocks             mtime            size
+.               <DIR>           rwxr-xr-x  528                07-07 09:15:31           ----
+..              <DIR>           rwxr-xr-x  524                07-07 09:15:31           ----
+readme.txt      <FILE>          rw-r--r--  529                07-07 09:15:31             12 bytes
+[root@/backup/]# cd ~
 [root@/]# whoami
 User: root  (uid=0, gid=0)
 [root@/]# ckdisk
@@ -174,7 +183,8 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | 9 | `main.c` 末尾 147 行死代码 | **Phase 1 移除** |
 | 10 | 中文注释 GBK 编码 | **已修复为 UTF-8** |
 | 11 | `sleep()` 函数声明但无实现 | **Phase 3 移除**（不再声明） |
-| 12 | 不支持多级路径 (`cd t1/t2`、`mkdir t3/t4` 无效) | ✅ 本次修复 — 新增 `dir_navigate()` 多级导航引擎，`cd`/`mkdir`/`touch` 支持路径分隔 |
+| 12 | 不支持多级路径 (`cd t1/t2`、`mkdir t3/t4` 无效) | ✅ 已修复 — 新增 `dir_navigate()` 多级导航引擎，`cd`/`mkdir`/`touch` 支持路径分隔 |
+| 13 | 缺少 `cp` / `mv` 命令 | ✅ 已实现 — `mv` 支持文件/目录移动+改名+`. .`修正；`cp` 支持文件复制+覆盖 |
 
 ### 仍存在的问题 / Remaining Issues
 
@@ -211,7 +221,7 @@ Block 0     Block 1     Block 2     Block 3     Block 4-515  Block 516+
 | **chmod / chown 命令** | 修改文件的权限位和所有者 | `file_ops.c` | 中 |
 | ~~**绝对路径 & 多级路径**~~ | ~~支持 `mkdir /home/user/docs`、`cd /home` 等~~ → ✅ 已完成：`dir_navigate()` 实现多级导航，`cd`、`mkdir`、`touch` 支持 `~/` 绝对路径和 `a/b/c` 相对路径 | `directory.c`、`file_ops.c` | ~~中~~ ✅ |
 | **文件追加写模式** | `write` 增加 `>>` 追加模式 | `file_ops.c:file_write()` | 小 |
-| **cp / mv 命令** | 文件复制和移动（跨目录） | `file_ops.c` | 中 |
+| ~~**cp / mv 命令**~~ | ~~文件复制和移动（跨目录）~~ → ✅ 已完成：`mv` 支持文件/目录移动+重命名+`..`修正；`cp` 支持文件复制+覆盖，uid/gid 归属当前用户 | `file_ops.c` | ~~中~~ ✅ |
 | **目录项变长支持** | 利用 `rec_len` 支持变长文件名（>8 字符） | `ext2_types.h`、`directory.c` | 中 |
 | **卷标读写** | 增加 `volname` 命令读/写卷标 | `context.c` | 小 |
 

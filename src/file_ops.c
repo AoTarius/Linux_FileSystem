@@ -655,6 +655,239 @@ restore:
 }
 
 /* ================================================================
+ * cp — 复制文件
+ *
+ * 行为：
+ *   cp f1 f2       复制为 f2（若 f2 已存在则覆盖）
+ *   cp f1 dir1/    复制到目录 dir1 内（保持原名）
+ *   cp dir1/f1 f2  跨目录复制
+ *
+ * 限制：
+ *   - 仅支持普通文件（目录需 -r，未实现）
+ *   - 单文件最大 4KB（受限于 8 个直接块）
+ * ================================================================ */
+
+void cp(const char *src, const char *dst)
+{
+    char src_buf[256], dst_buf[256];
+    unsigned short saved_dir;
+    char saved_path[256];
+    unsigned short src_ino, src_block, src_entry;
+    unsigned short src_mode;
+    unsigned long src_size, src_blocks;
+    const char *src_name;                    /* 源文件名，供阶段 2 复用 */
+
+    /* ---- 保存当前状态 ---- */
+    saved_dir = ctx.current_dir;
+    strcpy(saved_path, ctx.current_path);
+
+    /* ============================================================
+     * 阶段 1：读取源文件
+     * ============================================================ */
+    strcpy(src_buf, src);
+    {
+        char *slash = strrchr(src_buf, '/');
+        if (slash) {
+            *slash = '\0';
+            if (src_buf[0] == '\0') {
+                ctx.current_dir = 1;
+            } else if (dir_navigate(src_buf) != 0) {
+                printf("cp: cannot stat '%s': No such file or directory\n", src);
+                goto restore;
+            }
+            src_name = slash + 1;
+        } else {
+            src_name = src_buf;
+        }
+
+        /* 查找源文件（仅普通文件，不支持目录） */
+        if (!dir_lookup(src_name, 1, &src_ino, &src_block, &src_entry)) {
+            /* 检查是否是目录 */
+            if (dir_lookup(src_name, 2, &src_ino, &src_block, &src_entry)) {
+                printf("cp: -r not specified; omitting directory '%s'\n",
+                       src_name);
+            } else {
+                printf("cp: cannot stat '%s': No such file or directory\n",
+                       src);
+            }
+            goto restore;
+        }
+    }
+
+    /* 读取源文件全部数据到 write_buf */
+    {
+        inode_read(src_ino);
+        src_mode   = ctx.inode_cache.i_mode;
+        src_size   = ctx.inode_cache.i_size;
+        src_blocks = ctx.inode_cache.i_blocks;
+
+        if (src_size > 0) {
+            unsigned short b;
+            for (b = 0; b < src_blocks; b++) {
+                data_read(ctx.inode_cache.i_block[b]);
+                memcpy(ctx.write_buf + b * BLOCK_SIZE,
+                       ctx.data_buf, BLOCK_SIZE);
+            }
+        }
+    }
+
+    /* ============================================================
+     * 阶段 2：定位目标目录与文件名
+     * ============================================================ */
+
+    /* 恢复到原始目录 */
+    ctx.current_dir = saved_dir;
+    strcpy(ctx.current_path, saved_path);
+
+    strcpy(dst_buf, dst);
+    {
+        const char *final_name;
+        const char *name_part;
+
+        {
+            char *slash = strrchr(dst_buf, '/');
+            if (slash) {
+                name_part = slash + 1;      /* 先保存，再截断 */
+                *slash = '\0';
+                if (dst_buf[0] == '\0') {
+                    ctx.current_dir = 1;
+                } else if (dir_navigate(dst_buf) != 0) {
+                    printf("cp: cannot create '%s': "
+                           "No such file or directory\n", dst);
+                    goto restore;
+                }
+            } else {
+                name_part = dst_buf;
+            }
+        }
+
+        /* 确定最终文件名 */
+        if (name_part[0] == '\0') {
+            /* 路径以 / 结尾 → 移入目录，保持源名 */
+            final_name = src_name;
+        } else {
+            unsigned short d_ino, d_blk, d_ent;
+            if (dir_lookup(name_part, 2, &d_ino, &d_blk, &d_ent)) {
+                /* 目标是目录 → 移入，保持源名 */
+                ctx.current_dir = d_ino;
+                final_name = src_name;
+            } else {
+                final_name = name_part;
+            }
+        }
+
+        /* ============================================================
+         * 阶段 3：冲突处理 & 创建副本
+         * ============================================================ */
+
+        /* 覆盖已存在的文件 */
+        {
+            unsigned short ov_ino, ov_blk, ov_ent;
+            if (dir_lookup(final_name, 1, &ov_ino, &ov_blk, &ov_ent)) {
+                inode_read(ov_ino);
+                {
+                    unsigned short m = 0;
+                    while (m < ctx.inode_cache.i_blocks)
+                        bfree(ctx.inode_cache.i_block[m++]);
+                }
+                ctx.inode_cache.i_blocks = 0;
+                ctx.inode_cache.i_size  = 0;
+                ctx.inode_cache.i_dtime = (unsigned long)time(NULL);
+                inode_write(ov_ino);
+                ifree(ov_ino);
+
+                inode_read(ctx.current_dir);
+                dir_read(ctx.inode_cache.i_block[ov_blk]);
+                ctx.dir_cache[ov_ent].inode = 0;
+                dir_write(ctx.inode_cache.i_block[ov_blk]);
+                ctx.inode_cache.i_size -= 16;
+                {
+                    time_t now = time(NULL);
+                    ctx.inode_cache.i_mtime = (unsigned long)now;
+                    ctx.inode_cache.i_ctime = (unsigned long)now;
+                }
+                inode_write(ctx.current_dir);
+            }
+        }
+
+        /* 不能覆盖目录 */
+        {
+            unsigned short d_ino, d_blk, d_ent;
+            if (dir_lookup(final_name, 2, &d_ino, &d_blk, &d_ent)) {
+                printf("cp: cannot overwrite directory '%s' "
+                       "with non-directory\n", final_name);
+                goto restore;
+            }
+        }
+
+        /* ---- 创建目标文件（空文件） ---- */
+        file_create(final_name, 1);
+
+        /* ---- 找到新文件 inode，写入数据 ---- */
+        {
+            unsigned short new_ino, new_blk, new_ent;
+            if (!dir_lookup(final_name, 1, &new_ino, &new_blk, &new_ent)) {
+                printf("cp: internal error: file not found after create\n");
+                goto restore;
+            }
+
+            inode_read(new_ino);
+
+            /* 设置权限（从源复制 mode，uid/gid 使用当前用户） */
+            ctx.inode_cache.i_mode = src_mode;
+            ctx.inode_cache.i_uid  = ctx.current_uid;
+            ctx.inode_cache.i_gid  = ctx.current_gid;
+
+            if (src_size > 0) {
+                unsigned short need_blocks, b;
+                unsigned long remaining;
+
+                need_blocks = (unsigned short)(src_size / BLOCK_SIZE);
+                if (src_size % BLOCK_SIZE) need_blocks++;
+
+                /* 分配数据块 */
+                for (b = 0; b < need_blocks; b++) {
+                    ctx.inode_cache.i_block[b] = balloc();
+                }
+                ctx.inode_cache.i_blocks = need_blocks;
+                ctx.inode_cache.i_size   = src_size;
+
+                /* 写入数据 */
+                remaining = src_size;
+                for (b = 0; b < need_blocks; b++) {
+                    unsigned short chunk = (remaining > BLOCK_SIZE)
+                                           ? BLOCK_SIZE
+                                           : (unsigned short)remaining;
+                    data_read(ctx.inode_cache.i_block[b]);
+                    memcpy(ctx.data_buf,
+                           ctx.write_buf + b * BLOCK_SIZE, chunk);
+                    data_write(ctx.inode_cache.i_block[b]);
+                    remaining -= chunk;
+                }
+            } else {
+                /* 空文件 */
+                ctx.inode_cache.i_blocks = 0;
+                ctx.inode_cache.i_size   = 0;
+            }
+
+            /* 时间戳 — 新文件使用当前时间 */
+            {
+                time_t now = time(NULL);
+                ctx.inode_cache.i_atime = (unsigned long)now;
+                ctx.inode_cache.i_mtime = (unsigned long)now;
+                ctx.inode_cache.i_ctime = (unsigned long)now;
+            }
+
+            inode_write(new_ino);
+        }
+    }
+
+restore:
+    ctx.current_dir = saved_dir;
+    strcpy(ctx.current_path, saved_path);
+}
+
+/* ================================================================
  * 向后兼容包装（保持 main.h 中声明的旧 API 不变）
  *
  * mkdir / cat 支持多级路径：mkdir t3/t4 会先进入 t3 再创建 t4。

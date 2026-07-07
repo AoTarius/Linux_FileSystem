@@ -42,6 +42,9 @@ void shell_run(void)
         } else if (!strcmp(command, "mv")) {
             scanf("%s %s", temp, temp2);
             mv(temp, temp2);
+        } else if (!strcmp(command, "cp")) {
+            scanf("%s %s", temp, temp2);
+            cp(temp, temp2);
         } else if (!strcmp(command, "open")) {
             scanf("%s", temp);
             open_file(temp);
