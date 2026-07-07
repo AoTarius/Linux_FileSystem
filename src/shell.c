@@ -8,6 +8,37 @@
 #include "fs_context.h"
 #include "user.h"
 
+void help(void)
+{
+    printf("\n========== 命令列表 / Commands ==========\n\n");
+    printf("  ls                 列出当前目录内容\n");
+    printf("  cd <路径>          切换目录 (支持多级路径)\n");
+    printf("  mkdir <路径>       创建目录\n");
+    printf("  touch <路径>       创建普通文件\n");
+    printf("  cat <文件>         打印文件内容\n");
+    printf("  cp <源> <目标>     复制文件\n");
+    printf("  mv <源> <目标>     移动/重命名文件或目录\n");
+    printf("  chmod <八进制> <文件>  修改文件权限\n");
+    printf("  chown <用户> <文件>   修改文件所有者\n");
+    printf("  open <文件>        打开文件\n");
+    printf("  close <文件>       关闭文件\n");
+    printf("  read <文件>        读取已打开的文件\n");
+    printf("  write <文件>       覆盖写入 (以#结束)\n");
+    printf("  write >> <文件>    追加写入 (以#结束)\n");
+    printf("  rm <文件>          删除文件\n");
+    printf("  rmdir <目录>       删除空目录\n");
+    printf("  format             格式化磁盘\n");
+    printf("  ckdisk             查看磁盘状态\n");
+    printf("  volname [名称]     读取/修改卷标\n");
+    printf("  whoami             查看当前用户\n");
+    printf("  useradd <用户>     创建新用户 (root)\n");
+    printf("  passwd             修改密码\n");
+    printf("  login              切换用户\n");
+    printf("  help               显示此帮助\n");
+    printf("  quit               退出\n");
+    printf("\n==========================================\n\n");
+}
+
 void shell_run(void)
 {
     char command[10], temp[256], temp2[256];
@@ -27,6 +58,8 @@ void shell_run(void)
         if (!strcmp(command, "cd")) {
             scanf("%s", temp);
             cd(temp);
+        } else if (!strcmp(command, "help")) {
+            help();
         } else if (!strcmp(command, "mkdir")) {
             scanf("%s", temp);
             mkdir(temp, 2);
