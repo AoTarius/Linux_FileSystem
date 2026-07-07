@@ -28,8 +28,8 @@ struct inode *ext2_sim_iget(struct super_block *sb, uint16_t ino)
     if (!inode)
         return ERR_PTR(-ENOMEM);
 
-    /* 已在缓存中 → 直接返回 */
-    if (!(inode->i_state & I_NEW))
+    /* 已在缓存中 → 直接返回（v7.x: i_state 是 struct，访问 .flags） */
+    if (!(inode->i_state.flags & I_NEW))
         return inode;
 
     /* ── 新分配的 inode：从磁盘填充 ───────────────────── */
@@ -45,21 +45,19 @@ struct inode *ext2_sim_iget(struct super_block *sb, uint16_t ino)
           + EXT2_SIM_INODE_OFFSET(ino));
 
     /* 填充 VFS inode 字段 */
-    inode->i_mode  = le16_to_cpu(raw->i_mode);
+    inode->i_mode   = le16_to_cpu(raw->i_mode);
     i_uid_write(inode, le16_to_cpu(raw->i_uid));
     i_gid_write(inode, le16_to_cpu(raw->i_gid));
-    inode->i_size  = le32_to_cpu(raw->i_size);
+    inode->i_size   = le32_to_cpu(raw->i_size);
     inode->i_blocks = le16_to_cpu(raw->i_blocks);
 
-    inode->i_atime.tv_sec  = (time64_t)le32_to_cpu(raw->i_atime);
-    inode->i_atime.tv_nsec = 0;
-    inode->i_mtime.tv_sec  = (time64_t)le32_to_cpu(raw->i_mtime);
-    inode->i_mtime.tv_nsec = 0;
-    inode->i_ctime.tv_sec  = (time64_t)le32_to_cpu(raw->i_ctime);
-    inode->i_ctime.tv_nsec = 0;
+    /* v7.x 时间戳：通过 setter 函数设置 */
+    inode_set_atime(inode, (time64_t)le32_to_cpu(raw->i_atime), 0);
+    inode_set_mtime(inode, (time64_t)le32_to_cpu(raw->i_mtime), 0);
+    inode_set_ctime(inode, (time64_t)le32_to_cpu(raw->i_ctime), 0);
 
     inode->i_ino = ino;
-    inode->i_links_count = le16_to_cpu(raw->i_links_count);
+    set_nlink(inode, le16_to_cpu(raw->i_links_count));
 
     /* 根据文件类型设置操作表 */
     if (S_ISDIR(inode->i_mode)) {
