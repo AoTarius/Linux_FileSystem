@@ -27,6 +27,7 @@ struct fs_context;  /* 前置声明（避免循环依赖） */
 #define EXT2_SIM_NAME_LEN                8      /* 文件名最大长度 */
 #define EXT2_SIM_TOTAL_BLOCKS            4612
 #define EXT2_SIM_TOTAL_INODES            4096
+#define EXT2_SIM_ROOT_INO                1     /* 根目录 inode 号 */
 
 /* ── 各区域绝对块号 ──────────────────────────────────────── */
 
@@ -164,5 +165,16 @@ int ext2_sim_statfs(struct dentry *dentry, struct kstatfs *buf);
 
 /* ── 文件系统类型注册（super.c）───────────────────────────── */
 extern struct file_system_type ext2_sim_fs_type;
+
+/* ── super_operations（super.c）────────────────────────────── */
+extern struct super_operations ext2_sim_sops;
+
+/* ── inode_operations（inode.c）────────────────────────────── */
+extern const struct inode_operations ext2_sim_dir_inode_operations;
+extern const struct inode_operations ext2_sim_file_inode_operations;
+
+/* ── file_operations（file.c）──────────────────────────────── */
+extern const struct file_operations ext2_sim_dir_file_operations;
+extern const struct file_operations ext2_sim_file_file_operations;
 
 #endif /* _EXT2_SIM_FS_H */

@@ -4,7 +4,7 @@
 
 | 阶段 | 状态 | 文件 | 内容 | 交付产物 | 验证方式 |
 |:---:|:---:|------|------|------|------|
-| **1** | 🔧 已编写 | `Makefile`<br>`ext2_sim_disk.h`<br>`ext2_sim_fs.h`<br>+ 5个桩文件 | 项目骨架：Kbuild 编译系统、磁盘数据结构（`__le16`标注）、内存结构（`sbi`、`inode_info`）、所有宏定义、每模块桩函数 | 8 个文件编译通过 (`make` 零错误) | `make` → 生成 `ext2_sim.ko`；`insmod` → `dmesg` 显示 "module loaded" |
+| **1** | ✅ 已完成 | `Makefile`<br>`ext2_sim_disk.h`<br>`ext2_sim_fs.h`<br>+ 5个桩文件 | 项目骨架：Kbuild 编译系统、磁盘数据结构（`__le16`标注）、内存结构（`sbi`、`inode_info`）、所有宏定义、每模块桩函数 | 8 个文件编译通过 (`make` 零错误) | `make` → 生成 `ext2_sim.ko`；`insmod` → `dmesg` 显示 "module loaded" |
 | **2** | ⏳ 待完成 | `super.c` | 模块入口/出口、`fill_super`（读超级块→校验→构建VFS sb→读根inode→`d_make_root`）、`put_super`（释放bh→kfree sbi）、`alloc_inode`/`free_inode`、`statfs` | 可加载模块 + 可挂载 | `insmod` → `mount` → `ls /mnt/ext2` 看到 `.` 和 `..` |
 | **3** | ⏳ 待完成 | `balloc.c` | `balloc`（扫描块位图→置位→递减计数）、`bfree`（清零→递增计数）、`ialloc`（扫描inode位图→置位）、`ifree`（清零→递增计数） | 完整的位图分配/释放 | 被步骤 4、5 间接验证（创建文件不崩溃即通过） |
 | **4** | ⏳ 待完成 | `inode.c` | `iget`（从磁盘读inode→填充VFS inode→设置`i_op`/`i_fop`）、`write_inode`（VFS inode→磁盘）、`lookup`（目录查找→`d_splice_alias`）、`create`（ialloc→初始化磁盘inode→add_entry→`d_instantiate_new`） | 可创建文件 | `touch /mnt/ext2/f1` → `ls /mnt/ext2` 看到 f1 |
