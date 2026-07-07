@@ -20,7 +20,7 @@
 | `inode_operations->lookup` 返回值 | **使用 `d_splice_alias()`** | 处理目录别名，新内核标准做法（替代旧式 `d_add`） |
 | `super_operations->write_inode` | 返回 `int`（非 `void`） | 新内核签名变更 |
 | `super_operations->free_inode` | **使用**（非 `->destroy_inode`） | `destroy_inode` 已废弃，由 `free_inode` 替代 |
-| `mount_bdev()` 包装 | **使用** | 虽然后台用 `fs_context`，但 `mount_bdev` 封装接口仍然有效 |
+| `mount_bdev()` 包装 | **已移除**（v7.x） | 使用 `fs_context` + `get_tree_bdev()` 替代（见 §4.1） |
 
 ### 0.2 需要加入 `struct mnt_idmap *idmap` 参数的回调
 
@@ -279,15 +279,32 @@ static struct super_operations ext2_sim_sops = {
     .statfs        = ext2_sim_statfs,
 };
 
+/* ── fs_context 操作（替代 mount_bdev，内核 v5.4+ 必需）── */
+
+static int ext2_sim_get_tree(struct fs_context *fc)
+{
+    return get_tree_bdev(fc, ext2_sim_fill_super);
+}
+
+static const struct fs_context_operations ext2_sim_context_ops = {
+    .get_tree = ext2_sim_get_tree,
+};
+
+static int ext2_sim_init_fs_context(struct fs_context *fc)
+{
+    fc->ops = &ext2_sim_context_ops;
+    return 0;
+}
+
 static struct file_system_type ext2_sim_fs_type = {
-    .owner    = THIS_MODULE,
-    .name     = "ext2sim",
-    .mount    = ext2_sim_mount,    // 内部调 mount_bdev() → ext2_sim_fill_super
-    .kill_sb  = kill_block_super,
+    .owner           = THIS_MODULE,
+    .name            = "ext2sim",
+    .init_fs_context = ext2_sim_init_fs_context,
+    .kill_sb         = kill_block_super,
 };
 ```
 
-`ext2_sim_mount` 是 `mount_bdev()` 的包装，调用 `ext2_sim_fill_super`。
+`init_fs_context` → `get_tree_bdev()` → 最终调用 `ext2_sim_fill_super`。
 
 #### 4.1.5 模块入口
 
@@ -993,7 +1010,7 @@ struct ext2_sim_inode_info {
 ```
 用户操作                      VFS 调用                     我们的回调                          idmap?
 ──────────────────────────────────────────────────────────────────────────────────────────────────
-mount /dev/loop0 /mnt/ext2    mount_bdev()           → ext2_sim_fill_super()               —
+mount /dev/loop0 /mnt/ext2    get_tree_bdev()        → ext2_sim_fill_super()               —
 umount /mnt/ext2              kill_block_super()     → ext2_sim_put_super()                —
 ls /mnt/ext2                  iterate_dir()          → ext2_sim_readdir()                  —
 cat /mnt/ext2/f               vfs_read()             → ext2_sim_file_read()                —

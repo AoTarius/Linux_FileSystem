@@ -43,11 +43,10 @@
 
 ### Linux 内核版本适配
 
-代码基于 v6.18.37 的 VFS API 编写。如果目标 Ubuntu 的 `uname -r` 显示较低版本（如 5.15），可能需要调整：
-
-- **`mount_bdev`**：在 v6.x 中仍然可用（作为 `fs_context` 的封装），但你的内核需确认。如果 `make` 报 `implicit declaration of function 'mount_bdev'`，则改用 `fs_context` API
-- **`iterate_shared`**：5.x+ 已存在，确认即可
-- **`struct mnt_idmap *idmap`**：5.12+ 引入，如果内核 < 5.12，需去掉 `idmap` 参数
+- **你的 Ubuntu 内核：v7.0.0**，属于最新版，`mount_bdev` 已被彻底移除
+- **已修复**：`super.c` 改用 `fs_context` API（`init_fs_context` → `get_tree_bdev` → `fill_super`）
+- **已确认兼容**：`iterate_shared`、`struct mnt_idmap *idmap` 在 v7.x 中保持不变
+- 如果后续在其他内核版本上编译仍有问题，对照 CLAUDE.md §0 的 API 兼容表排查
 
 ### 编译验证步骤
 

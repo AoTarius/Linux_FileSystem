@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * super.c — 挂载/卸载/统计 & 模块注册
+ *           使用 fs_context API（适配内核 v5.4+，v7.x 必需）
  */
 
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/buffer_head.h>
+#include <linux/fs_context.h>
 #include "ext2_sim_fs.h"
 
 MODULE_LICENSE("GPL");
@@ -13,23 +15,30 @@ MODULE_AUTHOR("AoTarius");
 MODULE_DESCRIPTION("EXT2 Simple File System Kernel Module");
 MODULE_ALIAS_FS("ext2sim");
 
-/* ── 挂载包装（mount_bdev → fill_super）──────────────────── */
+/* ── fs_context 操作（替代 mount_bdev）───────────────────── */
 
-static struct dentry *ext2_sim_mount(struct file_system_type *fs_type,
-                                     int flags, const char *dev_name,
-                                     void *data)
+static int ext2_sim_get_tree(struct fs_context *fc)
 {
-    return mount_bdev(fs_type, flags, dev_name, data,
-                      ext2_sim_fill_super);
+    return get_tree_bdev(fc, ext2_sim_fill_super);
+}
+
+static const struct fs_context_operations ext2_sim_context_ops = {
+    .get_tree = ext2_sim_get_tree,
+};
+
+static int ext2_sim_init_fs_context(struct fs_context *fc)
+{
+    fc->ops = &ext2_sim_context_ops;
+    return 0;
 }
 
 /* ── 文件系统类型注册 ────────────────────────────────────── */
 
 struct file_system_type ext2_sim_fs_type = {
-    .owner   = THIS_MODULE,
-    .name    = "ext2sim",
-    .mount   = ext2_sim_mount,
-    .kill_sb = kill_block_super,
+    .owner           = THIS_MODULE,
+    .name            = "ext2sim",
+    .init_fs_context = ext2_sim_init_fs_context,
+    .kill_sb         = kill_block_super,
 };
 
 /* ── 模块入口 / 出口 ─────────────────────────────────────── */
