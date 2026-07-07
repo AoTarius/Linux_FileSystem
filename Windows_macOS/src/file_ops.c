@@ -49,7 +49,7 @@ static int check_write_perm(unsigned short mode,
  * 调用前需确保 ctx.inode_cache 已载入目标 inode。
  */
 unsigned short get_file_block(unsigned short ino,
-                                     unsigned short logical,
+                                     unsigned int logical,
                                      int allocate)
 {
     unsigned short phys;
@@ -64,13 +64,9 @@ unsigned short get_file_block(unsigned short ino,
         return ctx.inode_cache.i_block[logical];
     }
 
-    /* 一级间接块 */
-    {
+    /* ---- 一级间接块: i_block[12], 可寻址 256 个数据块 ---- */
+    if (logical < DIRECT_BLOCKS + INDIRECT_PTRS) {
         unsigned short idx = logical - DIRECT_BLOCKS;
-        if (idx >= INDIRECT_PTRS) {
-            /* 超出本系统支持范围 (二级/三级未实现，磁盘2MB用不到) */
-            return 0;
-        }
 
         /* 确保间接块存在 */
         if (ctx.inode_cache.i_block[SINGLE_INDIRECT] == 0) {
@@ -78,13 +74,9 @@ unsigned short get_file_block(unsigned short ino,
             ctx.inode_cache.i_block[SINGLE_INDIRECT] = balloc();
             ctx.inode_cache.i_blocks++;
             /* 清零间接块 */
-            {
-                unsigned short z;
-                data_read(ctx.inode_cache.i_block[SINGLE_INDIRECT]);
-                for (z = 0; z < BLOCK_SIZE; z++)
-                    ctx.data_buf[z] = 0;
-                data_write(ctx.inode_cache.i_block[SINGLE_INDIRECT]);
-            }
+            data_read(ctx.inode_cache.i_block[SINGLE_INDIRECT]);
+            memset(ctx.data_buf, 0, BLOCK_SIZE);
+            data_write(ctx.inode_cache.i_block[SINGLE_INDIRECT]);
             inode_write(ino);
         }
 
@@ -96,6 +88,130 @@ unsigned short get_file_block(unsigned short ino,
             phys = balloc();
             ((unsigned short *)ctx.data_buf)[idx] = phys;
             data_write(ctx.inode_cache.i_block[SINGLE_INDIRECT]);
+            ctx.inode_cache.i_blocks++;
+            inode_write(ino);
+        }
+
+        return phys;
+    }
+
+    /* ---- 二级间接块: i_block[13], 可寻址 256 个一级间接块 (256² 数据块) ---- */
+    if (logical < DIRECT_BLOCKS + INDIRECT_PTRS + INDIRECT_PTRS * INDIRECT_PTRS) {
+        unsigned short idx = logical - DIRECT_BLOCKS - INDIRECT_PTRS;
+        unsigned short dbl_idx = idx / INDIRECT_PTRS;  /* 目标一级间接块索引 */
+        unsigned short sgl_idx = idx % INDIRECT_PTRS;  /* 一级间接块内偏移 */
+        unsigned short dbl_ptrs[INDIRECT_PTRS];        /* 栈上保存二级间接块 */
+
+        /* 确保二级间接块存在 */
+        if (ctx.inode_cache.i_block[DOUBLE_INDIRECT] == 0) {
+            if (!allocate) return 0;
+            ctx.inode_cache.i_block[DOUBLE_INDIRECT] = balloc();
+            ctx.inode_cache.i_blocks++;
+            data_read(ctx.inode_cache.i_block[DOUBLE_INDIRECT]);
+            memset(ctx.data_buf, 0, BLOCK_SIZE);
+            data_write(ctx.inode_cache.i_block[DOUBLE_INDIRECT]);
+            inode_write(ino);
+        }
+
+        /* 读取二级间接块并保存到栈（后续 data_read 会覆盖 ctx.data_buf） */
+        data_read(ctx.inode_cache.i_block[DOUBLE_INDIRECT]);
+        memcpy(dbl_ptrs, ctx.data_buf, BLOCK_SIZE);
+
+        /* 确保目标一级间接块存在 */
+        if (dbl_ptrs[dbl_idx] == 0) {
+            if (!allocate) return 0;
+            dbl_ptrs[dbl_idx] = balloc();
+            ctx.inode_cache.i_blocks++;
+            /* 清零新一级间接块 */
+            data_read(dbl_ptrs[dbl_idx]);
+            memset(ctx.data_buf, 0, BLOCK_SIZE);
+            data_write(dbl_ptrs[dbl_idx]);
+            /* 写回更新的二级间接块 */
+            memcpy(ctx.data_buf, dbl_ptrs, BLOCK_SIZE);
+            data_write(ctx.inode_cache.i_block[DOUBLE_INDIRECT]);
+            inode_write(ino);
+        }
+
+        /* 从目标一级间接块中读取数据块指针 */
+        data_read(dbl_ptrs[dbl_idx]);
+        phys = ((unsigned short *)ctx.data_buf)[sgl_idx];
+
+        if (phys == 0 && allocate) {
+            phys = balloc();
+            ((unsigned short *)ctx.data_buf)[sgl_idx] = phys;
+            data_write(dbl_ptrs[dbl_idx]);
+            ctx.inode_cache.i_blocks++;
+            inode_write(ino);
+        }
+
+        return phys;
+    }
+
+    /* ---- 三级间接块: i_block[14], 可寻址 256 个二级间接块 (256³ 数据块) ---- */
+    {
+        unsigned short idx = logical - DIRECT_BLOCKS - INDIRECT_PTRS
+                             - INDIRECT_PTRS * INDIRECT_PTRS;
+        unsigned short tpl_idx = idx / (INDIRECT_PTRS * INDIRECT_PTRS);
+        unsigned short dbl_idx = (idx / INDIRECT_PTRS) % INDIRECT_PTRS;
+        unsigned short sgl_idx = idx % INDIRECT_PTRS;
+        unsigned short tpl_ptrs[INDIRECT_PTRS];  /* 保存三级间接块 */
+        unsigned short dbl_ptrs[INDIRECT_PTRS];  /* 保存二级间接块 */
+
+        /* 确保三级间接块存在 */
+        if (ctx.inode_cache.i_block[TRIPLE_INDIRECT] == 0) {
+            if (!allocate) return 0;
+            ctx.inode_cache.i_block[TRIPLE_INDIRECT] = balloc();
+            ctx.inode_cache.i_blocks++;
+            data_read(ctx.inode_cache.i_block[TRIPLE_INDIRECT]);
+            memset(ctx.data_buf, 0, BLOCK_SIZE);
+            data_write(ctx.inode_cache.i_block[TRIPLE_INDIRECT]);
+            inode_write(ino);
+        }
+
+        /* 读取三级间接块并保存 */
+        data_read(ctx.inode_cache.i_block[TRIPLE_INDIRECT]);
+        memcpy(tpl_ptrs, ctx.data_buf, BLOCK_SIZE);
+
+        /* 确保目标二级间接块存在 */
+        if (tpl_ptrs[tpl_idx] == 0) {
+            if (!allocate) return 0;
+            tpl_ptrs[tpl_idx] = balloc();
+            ctx.inode_cache.i_blocks++;
+            data_read(tpl_ptrs[tpl_idx]);
+            memset(ctx.data_buf, 0, BLOCK_SIZE);
+            data_write(tpl_ptrs[tpl_idx]);
+            /* 写回更新的三级间接块 */
+            memcpy(ctx.data_buf, tpl_ptrs, BLOCK_SIZE);
+            data_write(ctx.inode_cache.i_block[TRIPLE_INDIRECT]);
+            inode_write(ino);
+        }
+
+        /* 读取目标二级间接块并保存 */
+        data_read(tpl_ptrs[tpl_idx]);
+        memcpy(dbl_ptrs, ctx.data_buf, BLOCK_SIZE);
+
+        /* 确保目标一级间接块存在 */
+        if (dbl_ptrs[dbl_idx] == 0) {
+            if (!allocate) return 0;
+            dbl_ptrs[dbl_idx] = balloc();
+            ctx.inode_cache.i_blocks++;
+            data_read(dbl_ptrs[dbl_idx]);
+            memset(ctx.data_buf, 0, BLOCK_SIZE);
+            data_write(dbl_ptrs[dbl_idx]);
+            /* 写回更新的二级间接块 */
+            memcpy(ctx.data_buf, dbl_ptrs, BLOCK_SIZE);
+            data_write(tpl_ptrs[tpl_idx]);
+            inode_write(ino);
+        }
+
+        /* 从目标一级间接块中读取数据块指针 */
+        data_read(dbl_ptrs[dbl_idx]);
+        phys = ((unsigned short *)ctx.data_buf)[sgl_idx];
+
+        if (phys == 0 && allocate) {
+            phys = balloc();
+            ((unsigned short *)ctx.data_buf)[sgl_idx] = phys;
+            data_write(dbl_ptrs[dbl_idx]);
             ctx.inode_cache.i_blocks++;
             inode_write(ino);
         }
@@ -135,12 +251,56 @@ void free_file_blocks(unsigned short ino)
         ctx.inode_cache.i_block[SINGLE_INDIRECT] = 0;
     }
 
-    /* 二级/三级间接块：本磁盘仅 2MB，实际不会用到，预留框架 */
+    /* 释放二级间接块及其所有子树（一级间接块 → 数据块） */
     if (ctx.inode_cache.i_block[DOUBLE_INDIRECT]) {
+        unsigned short j, k;
+        unsigned short dbl_saved[INDIRECT_PTRS];
+        data_read(ctx.inode_cache.i_block[DOUBLE_INDIRECT]);
+        memcpy(dbl_saved, ctx.data_buf, BLOCK_SIZE);
+        for (j = 0; j < INDIRECT_PTRS; j++) {
+            if (dbl_saved[j]) {
+                unsigned short *sgl_ptrs;
+                data_read(dbl_saved[j]);
+                sgl_ptrs = (unsigned short *)ctx.data_buf;
+                for (k = 0; k < INDIRECT_PTRS; k++) {
+                    if (sgl_ptrs[k]) {
+                        bfree(sgl_ptrs[k]);
+                    }
+                }
+                bfree(dbl_saved[j]);
+            }
+        }
         bfree(ctx.inode_cache.i_block[DOUBLE_INDIRECT]);
         ctx.inode_cache.i_block[DOUBLE_INDIRECT] = 0;
     }
+
+    /* 释放三级间接块及其所有子树（二级间接 → 一级间接 → 数据块） */
     if (ctx.inode_cache.i_block[TRIPLE_INDIRECT]) {
+        unsigned short j, k, l;
+        unsigned short tpl_saved[INDIRECT_PTRS];
+        data_read(ctx.inode_cache.i_block[TRIPLE_INDIRECT]);
+        memcpy(tpl_saved, ctx.data_buf, BLOCK_SIZE);
+        for (j = 0; j < INDIRECT_PTRS; j++) {
+            if (tpl_saved[j]) {
+                unsigned short dbl_saved[INDIRECT_PTRS];
+                data_read(tpl_saved[j]);
+                memcpy(dbl_saved, ctx.data_buf, BLOCK_SIZE);
+                for (k = 0; k < INDIRECT_PTRS; k++) {
+                    if (dbl_saved[k]) {
+                        unsigned short *sgl_ptrs;
+                        data_read(dbl_saved[k]);
+                        sgl_ptrs = (unsigned short *)ctx.data_buf;
+                        for (l = 0; l < INDIRECT_PTRS; l++) {
+                            if (sgl_ptrs[l]) {
+                                bfree(sgl_ptrs[l]);
+                            }
+                        }
+                        bfree(dbl_saved[k]);
+                    }
+                }
+                bfree(tpl_saved[j]);
+            }
+        }
         bfree(ctx.inode_cache.i_block[TRIPLE_INDIRECT]);
         ctx.inode_cache.i_block[TRIPLE_INDIRECT] = 0;
     }

@@ -13,7 +13,7 @@ void file_read(const char *name);
 void file_write(const char *name);
 
 /* 间接块寻址（供 cp/mv 等命令使用） */
-unsigned short get_file_block(unsigned short ino, unsigned short logical,
+unsigned short get_file_block(unsigned short ino, unsigned int logical,
                               int allocate);
 void free_file_blocks(unsigned short ino);
 

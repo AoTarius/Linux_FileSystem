@@ -101,7 +101,7 @@ Block 0      Block 1     Block 2     Block 3     Block 4-515   Block 516+
 ```
 
 - **块大小**: 512 bytes · **总块数**: 4612 (~2.3 MB) · **数据块数**: 4096
-- **最大文件**: 134 KB (12 direct + 256 single-indirect)
+- **最大文件**: 134 KB (12 direct + 256 single-indirect)；理论最大 ~16TB (含二级/三级间接块，磁盘容量为实际瓶颈)
 - **最大 inode 数**: 4096 · **最大文件名**: 8 字符
 
 ## 开发路线 / Development Roadmap
