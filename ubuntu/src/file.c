@@ -16,6 +16,7 @@
 uint16_t ext2_sim_get_block(struct inode *inode, uint16_t logical,
                             int allocate)
 {
+    struct super_block *sb = inode->i_sb;
     struct buffer_head *bh;
     struct ext2_sim_inode_disk *raw;
     uint16_t block_rel;
@@ -26,16 +27,51 @@ uint16_t ext2_sim_get_block(struct inode *inode, uint16_t logical,
     }
 
     /* 从磁盘 inode 读取块指针 */
-    bh = sb_bread(inode->i_sb, EXT2_SIM_INODE_BLOCK(inode->i_ino));
+    bh = sb_bread(sb, EXT2_SIM_INODE_BLOCK(inode->i_ino));
     if (!bh)
         return 0;
 
     raw = (struct ext2_sim_inode_disk *)(bh->b_data
           + EXT2_SIM_INODE_OFFSET(inode->i_ino));
     block_rel = le16_to_cpu(raw->i_block[logical]);
-    brelse(bh);
 
-    return block_rel;  /* 相对于数据区起始块 516 的偏移 */
+    /*
+     * allocate 模式：块不存在则分配新数据块。
+     * 仅直接块支持分配（阶段 6），间接块在阶段 9 扩展。
+     */
+    if (allocate && block_rel == 0) {
+        block_rel = ext2_sim_balloc(sb);
+        if (block_rel == 0) {
+            brelse(bh);
+            return 0;  /* 磁盘满 */
+        }
+
+        /* 更新磁盘 inode 的 i_block[] */
+        raw->i_block[logical] = cpu_to_le16(block_rel);
+        raw->i_blocks = cpu_to_le16(le16_to_cpu(raw->i_blocks) + 1);
+        mark_buffer_dirty(bh);
+
+        /* 同步 VFS inode */
+        inode->i_blocks++;
+
+        /* 初始化新数据块为零 */
+        {
+            struct buffer_head *data_bh;
+            int block_abs = EXT2_SIM_DATA_BLOCK_START + block_rel;
+            data_bh = sb_bread(sb, block_abs);
+            if (data_bh) {
+                memset(data_bh->b_data, 0, EXT2_SIM_BLOCK_SIZE);
+                mark_buffer_dirty(data_bh);
+                brelse(data_bh);
+            }
+        }
+
+        printk(KERN_INFO "ext2sim: get_block: allocated block %u for ino=%lu logical=%u\n",
+               block_rel, inode->i_ino, logical);
+    }
+
+    brelse(bh);
+    return block_rel;
 }
 
 /* ═════════════════════════════════════════════════════════════
@@ -118,15 +154,121 @@ int ext2_sim_readdir(struct file *filp, struct dir_context *ctx)
 ssize_t ext2_sim_file_read(struct file *filp, char __user *buf,
                            size_t len, loff_t *ppos)
 {
-    /* TODO: Phase 6 — CLAUDE.md § 4.6.2 */
-    return -ENOSYS;
+    struct inode *inode = file_inode(filp);
+    struct super_block *sb = inode->i_sb;
+    struct buffer_head *bh;
+    uint16_t logical, block_rel;
+    int block_abs, offset;
+    size_t chunk, total = 0;
+
+    /* EOF */
+    if (*ppos >= inode->i_size)
+        return 0;
+
+    /* 截断请求长度 */
+    if ((loff_t)(*ppos + len) > inode->i_size)
+        len = inode->i_size - *ppos;
+
+    while (len > 0) {
+        logical = *ppos / EXT2_SIM_BLOCK_SIZE;
+        offset  = *ppos % EXT2_SIM_BLOCK_SIZE;
+
+        block_rel = ext2_sim_get_block(inode, logical, 0);
+        if (block_rel == 0) {
+            /*
+             * 空洞（未分配块）：填充零。
+             * 稀疏文件在 seek past EOF 后写入会产生空洞，
+             * 标准行为是返回零数据。
+             */
+            chunk = min_t(size_t, len, EXT2_SIM_BLOCK_SIZE - offset);
+            if (clear_user(buf, chunk))
+                return total > 0 ? (ssize_t)total : -EFAULT;
+        } else {
+            block_abs = EXT2_SIM_DATA_BLOCK_START + block_rel;
+            bh = sb_bread(sb, block_abs);
+            if (!bh)
+                return total > 0 ? (ssize_t)total : -EIO;
+
+            chunk = min_t(size_t, len, EXT2_SIM_BLOCK_SIZE - offset);
+            if (copy_to_user(buf, bh->b_data + offset, chunk)) {
+                brelse(bh);
+                return total > 0 ? (ssize_t)total : -EFAULT;
+            }
+            brelse(bh);
+        }
+
+        buf   += chunk;
+        len   -= chunk;
+        total += chunk;
+        *ppos += chunk;
+    }
+
+    /* 更新 atime */
+    inode_set_atime_to_ts(inode, current_time(inode));
+    mark_inode_dirty(inode);
+
+    return (ssize_t)total;
 }
 
 ssize_t ext2_sim_file_write(struct file *filp, const char __user *buf,
                             size_t len, loff_t *ppos)
 {
-    /* TODO: Phase 6 — CLAUDE.md § 4.6.3 */
-    return -ENOSYS;
+    struct inode *inode = file_inode(filp);
+    struct super_block *sb = inode->i_sb;
+    struct buffer_head *bh;
+    uint16_t logical, block_rel;
+    int block_abs, offset;
+    size_t chunk, total = 0;
+
+    /* v7.x: O_APPEND 时 VFS 可能未设置 *pos，手动修正 */
+    if (filp->f_flags & O_APPEND)
+        *ppos = inode->i_size;
+
+    while (len > 0) {
+        logical = *ppos / EXT2_SIM_BLOCK_SIZE;
+        offset  = *ppos % EXT2_SIM_BLOCK_SIZE;
+
+        /* allocate=1：块不存在则自动分配 */
+        block_rel = ext2_sim_get_block(inode, logical, 1);
+        if (block_rel == 0) {
+            /* 磁盘满，无法继续分配 */
+            printk(KERN_ERR "ext2sim: write: no space for logical=%u\n", logical);
+            break;
+        }
+
+        block_abs = EXT2_SIM_DATA_BLOCK_START + block_rel;
+        bh = sb_bread(sb, block_abs);
+        if (!bh)
+            return total > 0 ? (ssize_t)total : -EIO;
+
+        chunk = min_t(size_t, len, EXT2_SIM_BLOCK_SIZE - offset);
+        if (copy_from_user(bh->b_data + offset, buf, chunk)) {
+            brelse(bh);
+            return total > 0 ? (ssize_t)total : -EFAULT;
+        }
+
+        mark_buffer_dirty(bh);
+        brelse(bh);
+
+        buf   += chunk;
+        len   -= chunk;
+        total += chunk;
+        *ppos += chunk;
+    }
+
+    /* 更新 i_size（如果写入了新数据超出原长度） */
+    if (*ppos > inode->i_size)
+        inode->i_size = *ppos;
+
+    /* 更新 mtime / ctime */
+    {
+        struct timespec64 now = current_time(inode);
+        inode_set_mtime_to_ts(inode, now);
+        inode_set_ctime_to_ts(inode, now);
+    }
+    mark_inode_dirty(inode);
+
+    return (ssize_t)total;
 }
 
 /* ═════════════════════════════════════════════════════════════

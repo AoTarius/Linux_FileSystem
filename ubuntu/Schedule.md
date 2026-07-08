@@ -9,7 +9,7 @@
 | **3** | ✅ 已完成 | `balloc.c` | `balloc`（扫描块位图→置位→递减计数）、`bfree`（清零→递增计数）、`ialloc`（扫描inode位图→置位）、`ifree`（清零→递增计数） | 完整的位图分配/释放 | 通过步骤 4、5 间接验证 ✅ |
 | **4** | ✅ 已完成 | `inode.c` | `iget`（✅）、`write_inode`（VFS inode→磁盘）、`lookup`（目录查找→`d_splice_alias`）、`create`（ialloc→初始化磁盘inode→add_entry→`d_instantiate`） | 可创建文件 | `touch /mnt/ext2/f1` → `ls` 可见 + `stat` 正常 ✅ |
 | **5** | ✅ 已完成 | `dir.c` | `find_entry`（遍历目录块→按名匹配）、`add_entry`（找空槽→填入→mark_dirty）、`remove_entry`（定位→inode置零→mark_dirty） | 完整的目录操作 | `mkdir /mnt/ext2/d1` → `ls` 可见 + 重挂载数据持久化 ✅ |
-| **6** | ⏳ 待完成 | `file.c` | `file_read`（逻辑块→物理块→`sb_bread`→`copy_to_user`）、`file_write`（`copy_from_user`→`sb_bread`→扩大i_size）、`readdir`（遍历目录块→`dir_emit`）、`getattr`（`generic_fillattr(idmap, ...)`） | 可读写文件 + 目录列表 | `echo hi > /mnt/ext2/f1 && cat /mnt/ext2/f1` → 输出 hi |
+| **6** | ✅ 已完成 | `file.c` | `file_read`（逻辑块→物理块→`sb_bread`→`copy_to_user`，空洞填零）、`file_write`（`copy_from_user`→`sb_bread`→扩大i_size，支持 O_APPEND）、`readdir`（✅）、`getattr`（✅）、`get_block` 分配模式（直接块自动分配） | 可读写文件 + 目录列表 | `echo hi > /mnt/ext2/f1 && cat /mnt/ext2/f1` → 输出 hi + 重挂载持久化 ✅ |
 | **7** | ⏳ 待完成 | `inode.c` (补充) | `unlink`（目录移除条目→链接数--）、`rmdir`（检查空目录→移除条目→链接数--） | 可删除文件/目录 | `rm /mnt/ext2/f1` → 消失；`rmdir /mnt/ext2/d1` → 消失 |
 | **8** | ⏳ 待完成 | `inode.c` (补充) | `evict_inode`（释放所有数据块：直接+一级间接+二级间接+三级间接→ifree） | 删除后空间回收 | `df /mnt/ext2` 删除前后空闲块数正确变化 |
 | **9** | ⏳ 待完成 | `file.c` (补充) | `get_block`（逻辑块号→物理块号：直接块12个、一级间接、二级间接、三级间接；支持 `allocate` 自动扩展） | 支持大文件 | `dd if=/dev/urandom of=/mnt/ext2/big bs=512 count=200` → cat 校验 |
