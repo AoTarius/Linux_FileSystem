@@ -136,3 +136,151 @@ sudo losetup -d /dev/loop0
 # 7. 查看内核日志
 dmesg | tail -50
 ```
+
+## 完整体验流程（当前实现进度：阶段 1-8 ✅）
+
+以下脚本从零开始搭建文件系统并演示所有已实现功能。
+建议逐段复制到终端执行，观察每一步输出。
+
+### 第一步：搭建
+
+```bash
+# 在 ubuntu/ 目录下执行
+cd /home/hollow/Linux_FileSystem/ubuntu
+
+# 清理
+sudo umount /mnt/ext2 2>/dev/null
+sudo rmmod ext2_sim 2>/dev/null
+sudo losetup -d /dev/loop16 2>/dev/null
+
+# 编译
+make
+
+# 创建 2MB 磁盘镜像 + 挂载 loop 设备
+dd if=/dev/zero of=./test.img bs=512 count=4612
+sudo losetup /dev/loop16 ./test.img
+
+# 加载模块 + 挂载（首次自动格式化）
+sudo insmod ext2_sim.ko
+sudo mount -t ext2sim /dev/loop16 /mnt/ext2
+
+# 开放权限方便体验
+sudo chmod 777 /mnt/ext2
+```
+
+### 第二步：文件操作
+
+```bash
+# 查看空目录
+ls -la /mnt/ext2
+
+# 创建空文件
+touch /mnt/ext2/readme.txt
+ls -la /mnt/ext2
+
+# 写入内容
+echo "Hello EXT2 File System!" > /mnt/ext2/readme.txt
+cat /mnt/ext2/readme.txt
+
+# 追加写入
+echo "This is line two." >> /mnt/ext2/readme.txt
+cat /mnt/ext2/readme.txt
+
+# 查看属性（inode 号、权限、时间戳、链接数）
+stat /mnt/ext2/readme.txt
+```
+
+### 第三步：目录操作
+
+```bash
+# 创建目录 + 嵌套
+mkdir /mnt/ext2/docs
+mkdir /mnt/ext2/docs/sub
+touch /mnt/ext2/docs/sub/note.txt
+
+# 查看目录树
+ls -laR /mnt/ext2
+
+# 拒绝删除非空目录
+rmdir /mnt/ext2/docs       # 应报错 "Directory not empty"
+```
+
+### 第四步：删除与空间回收
+
+```bash
+# 查看当前磁盘使用
+df /mnt/ext2
+
+# 删除文件
+rm /mnt/ext2/docs/sub/note.txt
+rm /mnt/ext2/readme.txt
+
+# 删除空目录
+rmdir /mnt/ext2/docs/sub
+rmdir /mnt/ext2/docs
+
+# 空间已被回收
+df /mnt/ext2
+ls -la /mnt/ext2
+```
+
+### 第五步：大数据块读写
+
+```bash
+# 写入跨越多个数据块的文件（3 × 512 字节）
+dd if=/dev/urandom of=/mnt/ext2/bigfile bs=512 count=3
+
+# 验证数据完整性
+dd if=/mnt/ext2/bigfile of=/tmp/readback.bin bs=512 count=3
+cmp /mnt/ext2/bigfile /tmp/readback.bin && echo "DATA MATCH ✓"
+
+# 查看文件大小（1536 字节，Blocks=3）
+stat /mnt/ext2/bigfile
+```
+
+### 第六步：持久化验证
+
+```bash
+# 卸载
+sudo umount /mnt/ext2
+
+# 重新挂载
+sudo mount -t ext2sim /dev/loop16 /mnt/ext2
+
+# 数据全部还在
+ls -la /mnt/ext2
+cat /mnt/ext2/bigfile | wc -c    # 应显示 1536
+```
+
+### 第七步：查看内核日志 & 清理
+
+```bash
+# 查看模块运行日志
+dmesg | grep ext2sim: | tail -20
+
+# 完全清理
+sudo umount /mnt/ext2
+sudo rmmod ext2_sim
+sudo losetup -d /dev/loop16
+```
+
+### 功能清单速查
+
+| 功能 | 命令 | 状态 |
+|------|------|:---:|
+| 挂载（自动格式化） | `mount -t ext2sim` | ✅ |
+| 列出目录 | `ls` | ✅ |
+| 创建文件 | `touch` | ✅ |
+| 写入文件 | `echo > file` | ✅ |
+| 读取文件 | `cat` | ✅ |
+| 追加写入 | `echo >> file` | ✅ |
+| 创建目录 | `mkdir` | ✅ |
+| 删除文件 | `rm` | ✅ |
+| 删除空目录 | `rmdir` | ✅ |
+| 非空目录保护 | `rmdir nonempty/` | ✅ |
+| 文件属性 | `stat` | ✅ |
+| 磁盘空间 | `df` | ✅ |
+| 卸载重挂载持久化 | `umount` → `mount` | ✅ |
+| 删除后空间回收 | `rm` → `df` | ✅ |
+| 大文件读写 (>512B) | `dd` → `cmp` | ✅ |
+| 大文件 (>6KB) | — | ⏳ 阶段 9 |
