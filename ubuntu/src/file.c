@@ -7,71 +7,212 @@
 #include <linux/uaccess.h>
 #include "ext2_sim_fs.h"
 
+/* ── 辅助：分配并清零一个数据块，更新 VFS inode 计数 ────────── */
+static uint16_t alloc_new_block(struct super_block *sb, struct inode *inode)
+{
+    uint16_t block_rel = ext2_sim_balloc(sb);
+    struct buffer_head *data_bh;
+
+    if (block_rel == 0)
+        return 0;
+
+    data_bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + block_rel);
+    if (data_bh) {
+        memset(data_bh->b_data, 0, EXT2_SIM_BLOCK_SIZE);
+        mark_buffer_dirty(data_bh);
+        brelse(data_bh);
+    }
+    inode->i_blocks++;
+    return block_rel;
+}
+
 /* ═════════════════════════════════════════════════════════════
- *  get_block — 逻辑块号 → 物理块号映射
- *  阶段 2：仅支持直接块（i_block[0]~[11]）
- *  阶段 9：扩展间接块支持
+ *  get_block — 逻辑块号 → 相对块号映射
+ *  支持直接块 + 一级/二级/三级间接块，allocate 模式自动扩展。
  * ═════════════════════════════════════════════════════════════ */
 
 uint16_t ext2_sim_get_block(struct inode *inode, uint16_t logical,
                             int allocate)
 {
     struct super_block *sb = inode->i_sb;
-    struct buffer_head *bh;
+    struct buffer_head *inode_bh, *bh;
     struct ext2_sim_inode_disk *raw;
-    uint16_t block_rel;
+    uint16_t block_rel = 0;
 
-    if (logical >= EXT2_SIM_DIRECT_BLOCKS) {
-        /* TODO: Phase 9 — 间接块寻址 */
+    /* 读取磁盘 inode */
+    inode_bh = sb_bread(sb, EXT2_SIM_INODE_BLOCK(inode->i_ino));
+    if (!inode_bh)
         return 0;
-    }
-
-    /* 从磁盘 inode 读取块指针 */
-    bh = sb_bread(sb, EXT2_SIM_INODE_BLOCK(inode->i_ino));
-    if (!bh)
-        return 0;
-
-    raw = (struct ext2_sim_inode_disk *)(bh->b_data
+    raw = (struct ext2_sim_inode_disk *)(inode_bh->b_data
           + EXT2_SIM_INODE_OFFSET(inode->i_ino));
-    block_rel = le16_to_cpu(raw->i_block[logical]);
 
-    /*
-     * allocate 模式：块不存在则分配新数据块。
-     * 仅直接块支持分配（阶段 6），间接块在阶段 9 扩展。
-     */
-    if (allocate && block_rel == 0) {
-        block_rel = ext2_sim_balloc(sb);
-        if (block_rel == 0) {
-            brelse(bh);
-            return 0;  /* 磁盘满 */
-        }
-
-        /* 更新磁盘 inode 的 i_block[] */
-        raw->i_block[logical] = cpu_to_le16(block_rel);
-        raw->i_blocks = cpu_to_le16(le16_to_cpu(raw->i_blocks) + 1);
-        mark_buffer_dirty(bh);
-
-        /* 同步 VFS inode */
-        inode->i_blocks++;
-
-        /* 初始化新数据块为零 */
-        {
-            struct buffer_head *data_bh;
-            int block_abs = EXT2_SIM_DATA_BLOCK_START + block_rel;
-            data_bh = sb_bread(sb, block_abs);
-            if (data_bh) {
-                memset(data_bh->b_data, 0, EXT2_SIM_BLOCK_SIZE);
-                mark_buffer_dirty(data_bh);
-                brelse(data_bh);
+    /* ═════════ 直接块 (0~11) ═════════ */
+    if (logical < EXT2_SIM_DIRECT_BLOCKS) {
+        block_rel = le16_to_cpu(raw->i_block[logical]);
+        if (allocate && block_rel == 0) {
+            block_rel = alloc_new_block(sb, inode);
+            if (block_rel) {
+                raw->i_block[logical] = cpu_to_le16(block_rel);
+                raw->i_blocks = cpu_to_le16(le16_to_cpu(raw->i_blocks) + 1);
+                mark_buffer_dirty(inode_bh);
+                printk(KERN_INFO "ext2sim: get_block: direct block %u for ino=%lu logical=%u\n",
+                       block_rel, inode->i_ino, logical);
             }
         }
-
-        printk(KERN_INFO "ext2sim: get_block: allocated block %u for ino=%lu logical=%u\n",
-               block_rel, inode->i_ino, logical);
+        brelse(inode_bh);
+        return block_rel;
     }
 
-    brelse(bh);
-    return block_rel;
+    /* ═════════ 一级间接块 (12~267) ═════════ */
+    if (logical < EXT2_SIM_IND_BOUNDARY) {
+        int idx = logical - EXT2_SIM_DIRECT_BLOCKS;
+        uint16_t ind_block = le16_to_cpu(raw->i_block[EXT2_SIM_IND_BLOCK]);
+        uint16_t *ptrs;
+
+        if (ind_block == 0) {
+            if (!allocate) { brelse(inode_bh); return 0; }
+            ind_block = alloc_new_block(sb, inode);
+            if (!ind_block) { brelse(inode_bh); return 0; }
+            raw->i_block[EXT2_SIM_IND_BLOCK] = cpu_to_le16(ind_block);
+            raw->i_blocks = cpu_to_le16(le16_to_cpu(raw->i_blocks) + 1);
+            mark_buffer_dirty(inode_bh);
+        }
+
+        bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + ind_block);
+        if (!bh) { brelse(inode_bh); return 0; }
+        ptrs = (uint16_t *)bh->b_data;
+        block_rel = le16_to_cpu(ptrs[idx]);
+
+        if (allocate && block_rel == 0) {
+            block_rel = alloc_new_block(sb, inode);
+            if (block_rel) {
+                ptrs[idx] = cpu_to_le16(block_rel);
+                mark_buffer_dirty(bh);
+            }
+        }
+        brelse(bh);
+        brelse(inode_bh);
+        return block_rel;
+    }
+
+    /* ═════════ 二级间接块 (268~65803) ═════════ */
+    if (logical < EXT2_SIM_DIND_BOUNDARY) {
+        int dbl_idx = (logical - EXT2_SIM_IND_BOUNDARY) / EXT2_SIM_INDIRECT_PTRS;
+        int sgl_idx = (logical - EXT2_SIM_IND_BOUNDARY) % EXT2_SIM_INDIRECT_PTRS;
+        uint16_t dind_block = le16_to_cpu(raw->i_block[EXT2_SIM_DIND_BLOCK]);
+        uint16_t sgl_block;
+        uint16_t *dptrs, *sptrs;
+
+        if (dind_block == 0) {
+            if (!allocate) { brelse(inode_bh); return 0; }
+            dind_block = alloc_new_block(sb, inode);
+            if (!dind_block) { brelse(inode_bh); return 0; }
+            raw->i_block[EXT2_SIM_DIND_BLOCK] = cpu_to_le16(dind_block);
+            raw->i_blocks = cpu_to_le16(le16_to_cpu(raw->i_blocks) + 1);
+            mark_buffer_dirty(inode_bh);
+        }
+
+        /* 读二级间接块 → 取出对应的一级间接块号 */
+        bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + dind_block);
+        if (!bh) { brelse(inode_bh); return 0; }
+        dptrs = (uint16_t *)bh->b_data;
+        sgl_block = le16_to_cpu(dptrs[dbl_idx]);
+
+        if (sgl_block == 0) {
+            if (!allocate) { brelse(bh); brelse(inode_bh); return 0; }
+            sgl_block = alloc_new_block(sb, inode);
+            if (!sgl_block) { brelse(bh); brelse(inode_bh); return 0; }
+            dptrs[dbl_idx] = cpu_to_le16(sgl_block);
+            mark_buffer_dirty(bh);
+        }
+        brelse(bh);
+
+        /* 读一级间接块 → 取出数据块号 */
+        bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + sgl_block);
+        if (!bh) { brelse(inode_bh); return 0; }
+        sptrs = (uint16_t *)bh->b_data;
+        block_rel = le16_to_cpu(sptrs[sgl_idx]);
+
+        if (allocate && block_rel == 0) {
+            block_rel = alloc_new_block(sb, inode);
+            if (block_rel) {
+                sptrs[sgl_idx] = cpu_to_le16(block_rel);
+                mark_buffer_dirty(bh);
+            }
+        }
+        brelse(bh);
+        brelse(inode_bh);
+        return block_rel;
+    }
+
+    /* ═════════ 三级间接块 (65804+) ═════════ */
+    {
+        int tpl_idx = (logical - EXT2_SIM_DIND_BOUNDARY)
+                    / (EXT2_SIM_INDIRECT_PTRS * EXT2_SIM_INDIRECT_PTRS);
+        int dbl_idx = ((logical - EXT2_SIM_DIND_BOUNDARY)
+                    / EXT2_SIM_INDIRECT_PTRS) % EXT2_SIM_INDIRECT_PTRS;
+        int sgl_idx = (logical - EXT2_SIM_DIND_BOUNDARY)
+                    % EXT2_SIM_INDIRECT_PTRS;
+        uint16_t tind_block = le16_to_cpu(raw->i_block[EXT2_SIM_TIND_BLOCK]);
+        uint16_t dind_block, sgl_block;
+        uint16_t *tptrs, *dptrs, *sptrs;
+
+        if (tind_block == 0) {
+            if (!allocate) { brelse(inode_bh); return 0; }
+            tind_block = alloc_new_block(sb, inode);
+            if (!tind_block) { brelse(inode_bh); return 0; }
+            raw->i_block[EXT2_SIM_TIND_BLOCK] = cpu_to_le16(tind_block);
+            raw->i_blocks = cpu_to_le16(le16_to_cpu(raw->i_blocks) + 1);
+            mark_buffer_dirty(inode_bh);
+        }
+
+        /* 三级 → 二级 */
+        bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + tind_block);
+        if (!bh) { brelse(inode_bh); return 0; }
+        tptrs = (uint16_t *)bh->b_data;
+        dind_block = le16_to_cpu(tptrs[tpl_idx]);
+
+        if (dind_block == 0) {
+            if (!allocate) { brelse(bh); brelse(inode_bh); return 0; }
+            dind_block = alloc_new_block(sb, inode);
+            if (!dind_block) { brelse(bh); brelse(inode_bh); return 0; }
+            tptrs[tpl_idx] = cpu_to_le16(dind_block);
+            mark_buffer_dirty(bh);
+        }
+        brelse(bh);
+
+        /* 二级 → 一级 */
+        bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + dind_block);
+        if (!bh) { brelse(inode_bh); return 0; }
+        dptrs = (uint16_t *)bh->b_data;
+        sgl_block = le16_to_cpu(dptrs[dbl_idx]);
+
+        if (sgl_block == 0) {
+            if (!allocate) { brelse(bh); brelse(inode_bh); return 0; }
+            sgl_block = alloc_new_block(sb, inode);
+            if (!sgl_block) { brelse(bh); brelse(inode_bh); return 0; }
+            dptrs[dbl_idx] = cpu_to_le16(sgl_block);
+            mark_buffer_dirty(bh);
+        }
+        brelse(bh);
+
+        /* 一级 → 数据块 */
+        bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + sgl_block);
+        if (!bh) { brelse(inode_bh); return 0; }
+        sptrs = (uint16_t *)bh->b_data;
+        block_rel = le16_to_cpu(sptrs[sgl_idx]);
+
+        if (allocate && block_rel == 0) {
+            block_rel = alloc_new_block(sb, inode);
+            if (block_rel) {
+                sptrs[sgl_idx] = cpu_to_le16(block_rel);
+                mark_buffer_dirty(bh);
+            }
+        }
+        brelse(bh);
+        brelse(inode_bh);
+        return block_rel;
+    }
 }
 
 /* ═════════════════════════════════════════════════════════════

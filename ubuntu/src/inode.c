@@ -449,12 +449,37 @@ int ext2_sim_rmdir(struct inode *dir, struct dentry *dentry)
     return 0;
 }
 
+/* ── 辅助：释放一个装满 256 个指针的块，然后释放该块本身 ──────
+ * 返回释放的数据块总数（不含该指针块本身）。
+ */
+static uint16_t free_ptr_block(struct super_block *sb, uint16_t block_rel)
+{
+    struct buffer_head *bh;
+    uint16_t *ptrs;
+    uint16_t count = 0;
+    int i;
+
+    bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + block_rel);
+    if (!bh)
+        return 0;
+
+    ptrs = (uint16_t *)bh->b_data;
+    for (i = 0; i < EXT2_SIM_INDIRECT_PTRS; i++) {
+        uint16_t p = le16_to_cpu(ptrs[i]);
+        if (p != 0) {
+            ext2_sim_bfree(sb, p);
+            count++;
+        }
+    }
+    brelse(bh);
+    ext2_sim_bfree(sb, block_rel);
+    return count;
+}
+
 /* ═════════════════════════════════════════════════════════════
  *  evict_inode — VFS 释放 inode 的最后一步
- *  当 i_count 归零且 nlink==0 时，回收所有磁盘资源。
- *  CLAUDE.md § 4.5.0-c
- *
- *  注意：仅处理直接块（阶段 8），间接块在阶段 9 扩展。
+ *  当 i_count 归零且 nlink==0 时，回收所有磁盘资源
+ *  （直接块 + 一级/二级/三级间接块）。
  * ═════════════════════════════════════════════════════════════ */
 
 void ext2_sim_evict_inode(struct inode *inode)
@@ -462,22 +487,19 @@ void ext2_sim_evict_inode(struct inode *inode)
     struct super_block *sb = inode->i_sb;
     struct buffer_head *bh;
     struct ext2_sim_inode_disk *raw;
-    int logical;
+    int logical, i;
     uint16_t block_rel;
     uint16_t freed_blocks = 0;
 
-    /* 清除页缓存（虽然我们不用 address_space，安全调用无害） */
     truncate_inode_pages_final(&inode->i_data);
 
-    /* 仅当文件/目录已被删除（nlink==0）时才回收磁盘资源 */
     if (inode->i_nlink == 0) {
-        /* 读取磁盘 inode 获取 i_block[] 指针 */
         bh = sb_bread(sb, EXT2_SIM_INODE_BLOCK(inode->i_ino));
         if (bh) {
             raw = (struct ext2_sim_inode_disk *)(bh->b_data
                   + EXT2_SIM_INODE_OFFSET(inode->i_ino));
 
-            /* 释放所有直接块（12 个） */
+            /* ── 直接块 ── */
             for (logical = 0; logical < EXT2_SIM_DIRECT_BLOCKS; logical++) {
                 block_rel = le16_to_cpu(raw->i_block[logical]);
                 if (block_rel != 0) {
@@ -487,7 +509,64 @@ void ext2_sim_evict_inode(struct inode *inode)
                 }
             }
 
-            /* TODO: Phase 9 — 释放间接块 (i_block[12..14]) */
+            /* ── 一级间接块 ── */
+            block_rel = le16_to_cpu(raw->i_block[EXT2_SIM_IND_BLOCK]);
+            if (block_rel != 0) {
+                freed_blocks += free_ptr_block(sb, block_rel);
+                raw->i_block[EXT2_SIM_IND_BLOCK] = 0;
+            }
+
+            /* ── 二级间接块 ── */
+            block_rel = le16_to_cpu(raw->i_block[EXT2_SIM_DIND_BLOCK]);
+            if (block_rel != 0) {
+                struct buffer_head *dind_bh;
+                uint16_t *dptrs;
+                dind_bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + block_rel);
+                if (dind_bh) {
+                    dptrs = (uint16_t *)dind_bh->b_data;
+                    for (i = 0; i < EXT2_SIM_INDIRECT_PTRS; i++) {
+                        uint16_t sgl = le16_to_cpu(dptrs[i]);
+                        if (sgl != 0)
+                            freed_blocks += free_ptr_block(sb, sgl);
+                    }
+                    brelse(dind_bh);
+                }
+                ext2_sim_bfree(sb, block_rel);
+                raw->i_block[EXT2_SIM_DIND_BLOCK] = 0;
+            }
+
+            /* ── 三级间接块 ── */
+            block_rel = le16_to_cpu(raw->i_block[EXT2_SIM_TIND_BLOCK]);
+            if (block_rel != 0) {
+                struct buffer_head *tind_bh;
+                uint16_t *tptrs;
+                tind_bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + block_rel);
+                if (tind_bh) {
+                    tptrs = (uint16_t *)tind_bh->b_data;
+                    for (i = 0; i < EXT2_SIM_INDIRECT_PTRS; i++) {
+                        uint16_t dind = le16_to_cpu(tptrs[i]);
+                        if (dind != 0) {
+                            struct buffer_head *d_bh;
+                            uint16_t *dptrs;
+                            int j;
+                            d_bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + dind);
+                            if (d_bh) {
+                                dptrs = (uint16_t *)d_bh->b_data;
+                                for (j = 0; j < EXT2_SIM_INDIRECT_PTRS; j++) {
+                                    uint16_t sgl = le16_to_cpu(dptrs[j]);
+                                    if (sgl != 0)
+                                        freed_blocks += free_ptr_block(sb, sgl);
+                                }
+                                brelse(d_bh);
+                            }
+                            ext2_sim_bfree(sb, dind);
+                        }
+                    }
+                    brelse(tind_bh);
+                }
+                ext2_sim_bfree(sb, block_rel);
+                raw->i_block[EXT2_SIM_TIND_BLOCK] = 0;
+            }
 
             raw->i_blocks = 0;
             raw->i_size   = 0;
@@ -495,7 +574,6 @@ void ext2_sim_evict_inode(struct inode *inode)
             brelse(bh);
         }
 
-        /* 释放 inode 本身 */
         ext2_sim_ifree(sb, inode->i_ino);
 
         printk(KERN_INFO "ext2sim: evict: ino=%lu freed %u data blocks + inode\n",

@@ -12,7 +12,7 @@
 | **6** | ✅ 已完成 | `file.c` | `file_read`（逻辑块→物理块→`sb_bread`→`copy_to_user`，空洞填零）、`file_write`（`copy_from_user`→`sb_bread`→扩大i_size，支持 O_APPEND）、`readdir`（✅）、`getattr`（✅）、`get_block` 分配模式（直接块自动分配） | 可读写文件 + 目录列表 | `echo hi > /mnt/ext2/f1 && cat /mnt/ext2/f1` → 输出 hi + 重挂载持久化 ✅ |
 | **7** | ✅ 已完成 | `inode.c` (补充) | `unlink`（目录移除条目→链接数--）、`rmdir`（检查空目录 i_size==32→移除条目→链接数--） | 可删除文件/目录 | `rm /mnt/ext2/f1` → 消失；`rmdir /mnt/ext2/d2` → 消失；非空目录拒绝 ✅ |
 | **8** | ✅ 已完成 | `inode.c` (补充) | `evict_inode`（nlink==0 时释放直接块→bfree→ifree，间接块 TODO 阶段 9） | 删除后空间回收 | `df /mnt/ext2` 删除 f1/f2/d2 后 used 从 3→1，新建文件复用空间 ✅ |
-| **9** | ⏳ 待完成 | `file.c` (补充) | `get_block`（逻辑块号→物理块号：直接块12个、一级间接、二级间接、三级间接；支持 `allocate` 自动扩展） | 支持大文件 | `dd if=/dev/urandom of=/mnt/ext2/big bs=512 count=200` → cat 校验 |
+| **9** | ✅ 已完成 | `file.c` (补充) | `get_block`（直接块+一级间接+二级间接+三级间接；`allocate` 自动扩展；`alloc_new_block` 封装）+ `evict_inode` 间接块释放（`free_ptr_block` 递归释放所有层级） | 支持大文件 | 5KB→7KB(越界一级)→25KB→150KB(越界二级) 全部 `cmp MATCH` ✅ |
 | **10** | ⏳ 待完成 | 全部 | 时间戳更新（创建设 atime/ctime/mtime；读更新 atime；写更新 mtime/ctime）、`mkdir` 补充（`.`/`..`初始化+`bg_used_dirs_count`）、完善 `statfs`、卸载再挂载数据持久化 | 功能完整 | 完整操作测试 + `dmesg` 无异常；卸载→挂载→数据仍在 |
 | **11** | ⏳ 待完成 | 全部 | 压力验证：100个小文件创建/读取、长文件名边界、32条目满块目录自动扩展、空镜像首次挂载自动格式化、反复挂载卸载 10 次 | 稳定版本 | 全部通过，无 oops/panic/内存泄漏 |
 
