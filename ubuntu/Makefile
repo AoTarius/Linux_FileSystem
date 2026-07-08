@@ -12,8 +12,17 @@ ccflags-y := -I$(src)/include -Wall -Wno-unused-function
 all:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
 
-# Clean build artifacts
+# Clean build artifacts (.o, .ko, .mod, etc.)
 clean:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
 
-.PHONY: all clean
+# Deep clean: remove ALL generated files including disk images
+distclean: clean
+	@echo "Cleaning all generated files..."
+	@rm -f *.o *.ko *.mod *.mod.c *.mod.o modules.order Module.symvers
+	@rm -f .*.cmd .*.o .module-common.o
+	@rm -f src/*.o src/.*.cmd
+	@rm -f test.img Ext2
+	@echo "distclean complete."
+
+.PHONY: all clean distclean
