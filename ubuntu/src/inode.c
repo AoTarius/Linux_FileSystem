@@ -387,18 +387,122 @@ struct dentry *ext2_sim_mkdir(struct mnt_idmap *idmap, struct inode *dir,
     return dentry;
 }
 
-/* ── unlink / rmdir（阶段 7 实现）───────────────────────────── */
+/* ═════════════════════════════════════════════════════════════
+ *  unlink — 删除普通文件
+ *  CLAUDE.md § 4.5.6
+ *
+ *  注意：不在此释放数据块！数据块由 evict_inode（阶段 8）负责。
+ * ═════════════════════════════════════════════════════════════ */
 
 int ext2_sim_unlink(struct inode *dir, struct dentry *dentry)
 {
-    /* TODO: Phase 7 — CLAUDE.md § 4.5.6 */
-    return -ENOSYS;
+    struct inode *inode = d_inode(dentry);
+    int ret;
+
+    /* 从父目录移除条目 */
+    ret = ext2_sim_dir_remove_entry(dir, dentry->d_name.name,
+                                     dentry->d_name.len);
+    if (ret)
+        return ret;
+
+    /* 递减链接数（1 → 0，触发 evict_inode 回收） */
+    set_nlink(inode, inode->i_nlink - 1);
+    mark_inode_dirty(inode);
+
+    return 0;
 }
+
+/* ═════════════════════════════════════════════════════════════
+ *  rmdir — 删除空目录
+ *  CLAUDE.md § 4.5.7
+ *
+ *  注意：不在此释放数据块！数据块由 evict_inode（阶段 8）负责。
+ * ═════════════════════════════════════════════════════════════ */
 
 int ext2_sim_rmdir(struct inode *dir, struct dentry *dentry)
 {
-    /* TODO: Phase 7 — CLAUDE.md § 4.5.7 */
-    return -ENOSYS;
+    struct inode *inode = d_inode(dentry);
+    struct ext2_sim_sb_info *sbi = EXT2_SIM_SB(dir->i_sb);
+    struct ext2_sim_group_desc_disk *gd;
+    int ret;
+
+    /* 检查目录是否为空（只有 . 和 .. 两个条目，各 16 字节） */
+    if (inode->i_size != 32)
+        return -ENOTEMPTY;
+
+    /* 从父目录移除条目 */
+    ret = ext2_sim_dir_remove_entry(dir, dentry->d_name.name,
+                                     dentry->d_name.len);
+    if (ret)
+        return ret;
+
+    /* 目录已删除，nlink = 0 触发 evict_inode 回收资源 */
+    set_nlink(inode, 0);
+    mark_inode_dirty(inode);
+
+    /* 递减组描述符的已分配目录计数 */
+    gd = (struct ext2_sim_group_desc_disk *)sbi->s_gdbh->b_data;
+    gd->bg_used_dirs_count = cpu_to_le16(
+        le16_to_cpu(gd->bg_used_dirs_count) - 1);
+    mark_buffer_dirty(sbi->s_gdbh);
+
+    return 0;
+}
+
+/* ═════════════════════════════════════════════════════════════
+ *  evict_inode — VFS 释放 inode 的最后一步
+ *  当 i_count 归零且 nlink==0 时，回收所有磁盘资源。
+ *  CLAUDE.md § 4.5.0-c
+ *
+ *  注意：仅处理直接块（阶段 8），间接块在阶段 9 扩展。
+ * ═════════════════════════════════════════════════════════════ */
+
+void ext2_sim_evict_inode(struct inode *inode)
+{
+    struct super_block *sb = inode->i_sb;
+    struct buffer_head *bh;
+    struct ext2_sim_inode_disk *raw;
+    int logical;
+    uint16_t block_rel;
+    uint16_t freed_blocks = 0;
+
+    /* 清除页缓存（虽然我们不用 address_space，安全调用无害） */
+    truncate_inode_pages_final(&inode->i_data);
+
+    /* 仅当文件/目录已被删除（nlink==0）时才回收磁盘资源 */
+    if (inode->i_nlink == 0) {
+        /* 读取磁盘 inode 获取 i_block[] 指针 */
+        bh = sb_bread(sb, EXT2_SIM_INODE_BLOCK(inode->i_ino));
+        if (bh) {
+            raw = (struct ext2_sim_inode_disk *)(bh->b_data
+                  + EXT2_SIM_INODE_OFFSET(inode->i_ino));
+
+            /* 释放所有直接块（12 个） */
+            for (logical = 0; logical < EXT2_SIM_DIRECT_BLOCKS; logical++) {
+                block_rel = le16_to_cpu(raw->i_block[logical]);
+                if (block_rel != 0) {
+                    ext2_sim_bfree(sb, block_rel);
+                    raw->i_block[logical] = 0;
+                    freed_blocks++;
+                }
+            }
+
+            /* TODO: Phase 9 — 释放间接块 (i_block[12..14]) */
+
+            raw->i_blocks = 0;
+            raw->i_size   = 0;
+            mark_buffer_dirty(bh);
+            brelse(bh);
+        }
+
+        /* 释放 inode 本身 */
+        ext2_sim_ifree(sb, inode->i_ino);
+
+        printk(KERN_INFO "ext2sim: evict: ino=%lu freed %u data blocks + inode\n",
+               inode->i_ino, freed_blocks);
+    }
+
+    clear_inode(inode);
 }
 
 /* ═════════════════════════════════════════════════════════════

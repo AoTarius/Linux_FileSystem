@@ -134,6 +134,7 @@ int ext2_sim_dir_remove_entry(struct inode *dir, const char *name, int namelen);
 struct inode *ext2_sim_iget(struct super_block *sb, uint16_t ino);
 int           ext2_sim_write_inode(struct inode *inode,
                                    struct writeback_control *wbc);
+void          ext2_sim_evict_inode(struct inode *inode);
 
 /* VFS 回调（inode_operations / super_operations）              */
 struct dentry *ext2_sim_lookup(struct inode *dir, struct dentry *dentry,

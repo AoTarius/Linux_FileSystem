@@ -383,7 +383,8 @@ int ext2_sim_statfs(struct dentry *dentry, struct kstatfs *buf)
  * ═════════════════════════════════════════════════════════════ */
 
 struct super_operations ext2_sim_sops = {
-    .write_inode = ext2_sim_write_inode,
-    .put_super   = ext2_sim_put_super,
-    .statfs      = ext2_sim_statfs,
+    .write_inode  = ext2_sim_write_inode,
+    .evict_inode  = ext2_sim_evict_inode,
+    .put_super    = ext2_sim_put_super,
+    .statfs       = ext2_sim_statfs,
 };
