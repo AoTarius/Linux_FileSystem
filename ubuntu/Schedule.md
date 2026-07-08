@@ -5,7 +5,7 @@
 | 阶段 | 状态 | 文件 | 内容 | 交付产物 | 验证方式 |
 |:---:|:---:|------|------|------|------|
 | **1** | ✅ 已完成 | `Makefile`<br>`ext2_sim_disk.h`<br>`ext2_sim_fs.h`<br>+ 5个桩文件 | 项目骨架：Kbuild 编译系统、磁盘数据结构（`__le16`标注）、内存结构（`sbi`、`inode_info`）、所有宏定义、每模块桩函数 | 8 个文件编译通过 (`make` 零错误) | `make` → 生成 `ext2_sim.ko`；`insmod` → `dmesg` 显示 "module loaded" |
-| **2** | 🔧 已编写 | `super.c`<br>`inode.c`<br>`file.c` | 模块入口/出口、`fill_super`（读超级块→校验→构建VFS sb→读根inode→`d_make_root`）、`put_super`（释放bh→kfree sbi）、`alloc_inode`/`free_inode`、`statfs` | 可加载模块 + 可挂载 | `insmod` → `mount` → `ls /mnt/ext2` 看到 `.` 和 `..` |
+| **2** | ✅ 已完成 | `super.c`<br>`inode.c`<br>`file.c` | 模块入口/出口、`fill_super`（sb_set_blocksize→读超级块→校验→自动格式化→构建VFS sb→读根inode→`d_make_root`）、`put_super`（释放bh→kfree sbi）、`statfs`、`readdir`、`getattr`、`iget`、`get_block`（直接块）。alloc_inode/free_inode/evict_inode 使用内核默认实现。 | 可加载/挂载/卸载/重挂载、ls 可见 . 和 .. | `insmod` → `mount` → `ls` → `df` → `stat` → `umount` → 重挂载 → `dmesg` 无 oops |
 | **3** | ⏳ 待完成 | `balloc.c` | `balloc`（扫描块位图→置位→递减计数）、`bfree`（清零→递增计数）、`ialloc`（扫描inode位图→置位）、`ifree`（清零→递增计数） | 完整的位图分配/释放 | 被步骤 4、5 间接验证（创建文件不崩溃即通过） |
 | **4** | ⏳ 待完成 | `inode.c` | `iget`（从磁盘读inode→填充VFS inode→设置`i_op`/`i_fop`）、`write_inode`（VFS inode→磁盘）、`lookup`（目录查找→`d_splice_alias`）、`create`（ialloc→初始化磁盘inode→add_entry→`d_instantiate_new`） | 可创建文件 | `touch /mnt/ext2/f1` → `ls /mnt/ext2` 看到 f1 |
 | **5** | ⏳ 待完成 | `dir.c` | `find_entry`（遍历目录块→按名匹配）、`add_entry`（找空槽→填入→mark_dirty）、`remove_entry`（定位→inode置零→mark_dirty） | 完整的目录操作 | `mkdir /mnt/ext2/d1` → `ls /mnt/ext2` 看到 d1 |
@@ -235,8 +235,33 @@ git status
 
 当此项目在 Ubuntu 上被 Claude 打开时：
 
-1. **先读 `CLAUDE.md`** — 完整的内核模块开发规格说明书（v6.18.37 API）
+1. **先读 `CLAUDE.md`** — 完整的内核模块开发规格说明书（v7.0.0 API）
 2. **再读本文件** — 了解当前进度、已完成事项、注意事项
-3. **当前状态**：阶段 1 代码已编写，等待在 Ubuntu 上 `make` 编译验证
-4. **下一步**：如果编译通过，进入阶段 2 开发 `fill_super` 等核心逻辑
-5. **已声明的函数签名全部正确**（与 v6.18.37 对齐），不要修改签名，只在 TODO 标记处填充实现
+3. **当前状态**：阶段 1 ✅、阶段 2 ✅（挂载/卸载/重挂载/readdir/getattr/iget 全部通过）
+4. **下一步**：进入阶段 3（balloc.c 位图管理）或阶段 4（inode.c 文件/目录创建）
+5. **阶段 2 关键修复记录见下方「阶段 2 开发记录与注意事项」**
+
+---
+
+### 阶段 2 开发记录与注意事项
+
+#### 测试结果
+
+全流程通过：`insmod` → `mount`（自动格式化）→ `ls`（`.` 和 `..`）→ `df`（2.0M）→ `stat`→ `umount`（无崩溃）→ 重挂载（跳过格式化）→ `ls` → `rmmod`。
+
+#### 修复的 Bug
+
+| # | Bug | 文件 | 症状 | 根因 | 修复 |
+|---|---|---|---|---|---|
+| 1 | mount 死循环 | super.c | `mount` 卡在 `__find_get_block_slow`，97% CPU | 直接赋值 `sb->s_blocksize=512` 未调用 `sb_set_blocksize()`，buffer cache 未重新配置 | 改用 `sb_set_blocksize(sb, 512)` |
+| 2 | ls 空指针崩溃 | super.c | `ls` 触发 `__mark_inode_dirty` → `inode_io_list_move_locked` 空指针 | VFS 更新 atime 时标记 inode 为脏，但 inode 未接入 writeback 体系 | `sb->s_flags \|= SB_NOATIME` 禁用 atime |
+| 3 | umount 内核 oops | super.c inode.c | `umount` 时 `list_lru_del` 空指针崩溃，remount 卡在 `super_lock` | 自定义 `evict_inode` → `clear_inode` → `list_lru_del` 在 `kmalloc` 分配的 inode 上找不到 LRU 节点 | 移除自定义 `alloc_inode`/`free_inode`/`evict_inode`，改用内核默认实现（`kmem_cache_alloc_lru`） |
+| 4 | 格式化数据未持久化 | super.c | remount 可能读到脏数据 | `ext2_sim_format_disk` 写磁盘后未强制同步 | 格式化末尾调用 `sync_blockdev(sb->s_bdev)` |
+
+#### 关键设计决策
+
+| 事项 | 决策 |
+|------|------|
+| `alloc_inode` / `free_inode` | **不在阶段 2 实现**，使用内核默认的 `kmem_cache_alloc_lru`。阶段 8 需要 `ext2_sim_inode_info` 扩展字段时再加回来。 |
+| `evict_inode` | **不在阶段 2 实现**，使用内核默认行为。阶段 8 实现数据块释放时再加回来。 |
+| atime | 当前禁用（`SB_NOATIME`）。后续实现完整的 writeback 支持后移除。

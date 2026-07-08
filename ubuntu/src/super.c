@@ -7,6 +7,7 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/buffer_head.h>
+#include <linux/blkdev.h>
 #include <linux/fs_context.h>
 #include <linux/time.h>
 #include <linux/statfs.h>
@@ -186,6 +187,9 @@ static int ext2_sim_format_disk(struct super_block *sb)
     mark_buffer_dirty(bh);
     brelse(bh);
 
+    /* 强制同步所有写入，确保 remount 时数据已持久化 */
+    sync_blockdev(sb->s_bdev);
+
     printk(KERN_INFO "ext2sim: disk formatted successfully\n");
     return 0;
 }
@@ -201,9 +205,16 @@ int ext2_sim_fill_super(struct super_block *sb, struct fs_context *fc)
     struct inode *root_inode;
     int ret;
 
-    /* 设置块大小 */
-    sb->s_blocksize = EXT2_SIM_BLOCK_SIZE;
-    sb->s_blocksize_bits = 9;  /* 512 = 2^9 */
+    /*
+     * 设置块大小 — 必须通过 sb_set_blocksize() 而非直接赋值！
+     * 直接赋值 sb->s_blocksize 不会重新配置块设备的 buffer cache，
+     * 导致后续 sb_bread() 在哈希链中死循环（__find_get_block_slow）。
+     */
+    if (!sb_set_blocksize(sb, EXT2_SIM_BLOCK_SIZE)) {
+        printk(KERN_ERR "ext2sim: failed to set blocksize %d\n",
+               EXT2_SIM_BLOCK_SIZE);
+        return -EINVAL;
+    }
 
     /* 分配 sbi */
     sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
@@ -272,6 +283,13 @@ int ext2_sim_fill_super(struct super_block *sb, struct fs_context *fc)
     sb->s_maxbytes = (loff_t)EXT2_SIM_DATA_BLOCK_COUNTS * EXT2_SIM_BLOCK_SIZE;
     sb->s_op       = &ext2_sim_sops;
 
+    /*
+     * 禁用 atime：当前只实现 readdir，不实现 writeback，
+     * VFS 更新 atime 时会调用 __mark_inode_dirty 导致空指针崩溃。
+     * 后续实现 write_inode / address_space 后移除。
+     */
+    sb->s_flags |= SB_NOATIME;
+
     /* 读取根 inode */
     root_inode = ext2_sim_iget(sb, EXT2_SIM_ROOT_INO);
     if (IS_ERR(root_inode)) {
@@ -327,22 +345,6 @@ void ext2_sim_put_super(struct super_block *sb)
  *  alloc_inode / free_inode — VFS inode 生命周期
  * ═════════════════════════════════════════════════════════════ */
 
-struct inode *ext2_sim_alloc_inode(struct super_block *sb)
-{
-    struct ext2_sim_inode_info *ei;
-
-    ei = kmalloc(sizeof(*ei), GFP_KERNEL);
-    if (!ei)
-        return NULL;
-
-    return &ei->vfs_inode;
-}
-
-void ext2_sim_free_inode(struct inode *inode)
-{
-    kfree(EXT2_SIM_I(inode));
-}
-
 /* ═════════════════════════════════════════════════════════════
  *  statfs — df 命令数据源
  * ═════════════════════════════════════════════════════════════ */
@@ -374,10 +376,7 @@ int ext2_sim_statfs(struct dentry *dentry, struct kstatfs *buf)
  * ═════════════════════════════════════════════════════════════ */
 
 struct super_operations ext2_sim_sops = {
-    .alloc_inode = ext2_sim_alloc_inode,
-    .free_inode  = ext2_sim_free_inode,
     .write_inode = ext2_sim_write_inode,
-    .evict_inode = ext2_sim_evict_inode,
     .put_super   = ext2_sim_put_super,
     .statfs      = ext2_sim_statfs,
 };

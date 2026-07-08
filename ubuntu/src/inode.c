@@ -80,11 +80,6 @@ int ext2_sim_write_inode(struct inode *inode, struct writeback_control *wbc)
     return 0;
 }
 
-void ext2_sim_evict_inode(struct inode *inode)
-{
-    /* TODO: Phase 8 — CLAUDE.md § 4.5.0-c */
-}
-
 /* ── VFS inode_operations 回调 ───────────────────────────── */
 
 struct dentry *ext2_sim_lookup(struct inode *dir, struct dentry *dentry,

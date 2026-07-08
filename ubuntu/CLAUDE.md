@@ -19,8 +19,11 @@
 | `file_operations->iterate_shared` | **使用**（非 `->iterate`） | Linux 5.x+ 已移除 `->iterate`，统一用 `->iterate_shared` |
 | `inode_operations->lookup` 返回值 | **使用 `d_splice_alias()`** | 处理目录别名，新内核标准做法（替代旧式 `d_add`） |
 | `super_operations->write_inode` | 返回 `int`（非 `void`） | 新内核签名变更 |
-| `super_operations->free_inode` | **使用**（非 `->destroy_inode`） | `destroy_inode` 已废弃，由 `free_inode` 替代 |
+| `super_operations->alloc_inode` / `->free_inode` | **暂不使用**（阶段 1-7） | 用内核默认 `kmem_cache_alloc_lru`，避免 LRU 链表不兼容。阶段 8 需要 `ext2_sim_inode_info` 扩展字段时再加回来 |
+| `super_operations->evict_inode` | **暂不使用**（阶段 1-7） | 用内核默认行为（`truncate_inode_pages_final` + `clear_inode`）。阶段 8 需要在其中释放数据块 |
 | `mount_bdev()` 包装 | **已移除**（v7.x） | 使用 `fs_context` + `get_tree_bdev()` 替代（见 §4.1） |
+| `sb_set_blocksize()` | **必须调用** | 不能直接赋值 `sb->s_blocksize`！否则 buffer cache 未重新配置，`sb_bread()` 死循环 |
+| atime | **禁用**（`SB_NOATIME`） | 当前不实现 writeback，VFS 更新 atime 时调用 `__mark_inode_dirty` 会导致空指针。后续实现 address_space 后移除 |
 
 ### 0.2 需要加入 `struct mnt_idmap *idmap` 参数的回调
 
@@ -273,12 +276,11 @@ ubuntu/
 
 ```c
 static struct super_operations ext2_sim_sops = {
-    .alloc_inode   = ext2_sim_alloc_inode,
-    .free_inode    = ext2_sim_free_inode,       // 注意：不是 destroy_inode！
     .write_inode   = ext2_sim_write_inode,      // 注意：返回 int，非 void
-    .evict_inode   = ext2_sim_evict_inode,      // 当 i_nlink==0 时清理数据块
     .put_super     = ext2_sim_put_super,
     .statfs        = ext2_sim_statfs,
+    // .alloc_inode / .free_inode / .evict_inode 暂不实现，使用内核默认
+    // 阶段 8 需要时再加回来
 };
 
 /* ── fs_context 操作（替代 mount_bdev，内核 v5.4+ 必需）── */
@@ -486,6 +488,9 @@ static inline struct ext2_sim_inode_info *EXT2_SIM_I(struct inode *inode) {
 
 #### 4.5.0 `struct inode *ext2_sim_alloc_inode(struct super_block *sb)`
 
+> **当前状态**：阶段 1-7 **不实现此回调**，使用内核默认的 `kmem_cache_alloc_lru`。
+> 阶段 8 需要 `ext2_sim_inode_info` 扩展字段时再实现以下逻辑。
+
 **职责**：VFS 需要分配一个新的 VFS inode 时调用。为我们的私有数据 `ext2_sim_inode_info` 分配内存。
 
 **处理流程**：
@@ -505,6 +510,8 @@ struct ext2_sim_inode_info {
 
 #### 4.5.0-b `void ext2_sim_free_inode(struct inode *inode)`
 
+> **当前状态**：阶段 1-7 **不实现此回调**，使用内核默认行为。
+
 **职责**：VFS 释放 inode 时调用。释放 `ext2_sim_inode_info` 的内存。
 
 **处理流程**：
@@ -520,27 +527,8 @@ static inline struct ext2_sim_inode_info *EXT2_SIM_I(struct inode *inode) {
 
 #### 4.5.0-c `void ext2_sim_evict_inode(struct inode *inode)`
 
-**职责**：当 inode 的引用计数归零且 `i_nlink == 0`（文件已被删除）时调用。**在这里释放该 inode 占用的所有数据块**，然后调用 `truncate_inode_pages_final()` 清理页缓存。
-
-> **注意**：之前 CLAUDE.md 在 `ext2_sim_unlink()` 中做数据块释放是**错误的**。`unlink` 只从目录中移除条目，真正的数据块清理在 `evict_inode` 中进行。这保证了即使文件仍被其他进程打开（未 close），数据也不会丢失。
-
-**处理流程**：
-1. 若 `inode->i_nlink == 0 && !is_bad_inode(inode)`（文件已被删除且不再是坏 inode）：
-   - 调用 `truncate_inode_pages_final(&inode->i_data)` — 清理页缓存
-   - 释放该 inode 的所有数据块（**与 unlink 中描述的逻辑一致**）：
-     - 遍历 i_block[0～11]：逐个 `ext2_sim_bfree()`
-     - i_block[12] 间接块：读块 → 释放 256 个数据块 → 释放间接块自身
-     - i_block[13] 二级间接块：读块 → 遍历 256 个一级间接块递归释放 → 释放二级间接块
-     - i_block[14] 三级间接块：读块 → 遍历 256 个二级间接块递归释放 → 释放三级间接块
-   - `ext2_sim_ifree(sb, inode->i_ino)` — 释放 inode 号
-2. `clear_inode(inode)` — 最终清理
-
-**关键认知**：数据块释放从 `unlink` 中**移除**，移入 `evict_inode`。`unlink` 仅负责：
-- 从父目录删除条目
-- `inode->i_links_count--`
-- `mark_inode_dirty(inode)`
-
-剩余清理由 VFS 在最后一个 `iput` 时自动调用 `evict_inode` 完成。
+> **当前状态**：阶段 1-7 **不实现此回调**，使用内核默认行为（`truncate_inode_pages_final` + `clear_inode`）。
+> 阶段 8 需要释放数据块时再实现以下逻辑。
 
 #### 4.5.1 `struct inode *ext2_sim_iget(struct super_block *sb, uint16_t ino)`
 
