@@ -178,7 +178,7 @@ static int ext2_sim_format_disk(struct super_block *sb)
     /* 条目 1: ".." */
     de = (struct ext2_sim_dir_entry_disk *)(bh->b_data + 16);
     de->inode     = cpu_to_le16(EXT2_SIM_ROOT_INO);
-    de->rec_len   = cpu_to_le16(EXT2_SIM_BLOCK_SIZE - 16);
+    de->rec_len   = cpu_to_le16(16);   /* 统一 16 字节对齐，避免 readdir 跳过大段 */
     de->name_len  = cpu_to_le16(2);
     de->file_type = EXT2_SIM_FT_DIR;
     de->name[0]   = '.';
@@ -329,6 +329,13 @@ void ext2_sim_put_super(struct super_block *sb)
 
     if (!sbi)
         return;
+
+    /*
+     * 先强制刷盘，再释放 buffer_head。
+     * kill_block_super 的 sync_blockdev 在 put_super 之后调用，
+     * 若此处先 brelse，缓冲区在刷盘前就被释放，数据丢失。
+     */
+    sync_blockdev(sb->s_bdev);
 
     brelse(sbi->s_sbh);
     brelse(sbi->s_gdbh);

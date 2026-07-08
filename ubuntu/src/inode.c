@@ -9,6 +9,17 @@
 #include <linux/namei.h>
 #include "ext2_sim_fs.h"
 
+/* ── 辅助：读取磁盘 inode 到局部变量 ───────────────────────── */
+static struct ext2_sim_inode_disk *
+read_disk_inode(struct super_block *sb, uint16_t ino, struct buffer_head **bh)
+{
+    *bh = sb_bread(sb, EXT2_SIM_INODE_BLOCK(ino));
+    if (!*bh)
+        return NULL;
+    return (struct ext2_sim_inode_disk *)((*bh)->b_data
+           + EXT2_SIM_INODE_OFFSET(ino));
+}
+
 /* ═════════════════════════════════════════════════════════════
  *  iget — 从磁盘读取 inode 或从缓存获取
  * ═════════════════════════════════════════════════════════════ */
@@ -28,7 +39,7 @@ struct inode *ext2_sim_iget(struct super_block *sb, uint16_t ino)
     if (!inode)
         return ERR_PTR(-ENOMEM);
 
-    /* 已在缓存中 → 直接返回（v7.x: i_state 为 struct，用 accessor */
+    /* 已在缓存中 → 直接返回 */
     if (!(inode_state_read_once(inode) & I_NEW))
         return inode;
 
@@ -51,7 +62,6 @@ struct inode *ext2_sim_iget(struct super_block *sb, uint16_t ino)
     inode->i_size   = le32_to_cpu(raw->i_size);
     inode->i_blocks = le16_to_cpu(raw->i_blocks);
 
-    /* v7.x 时间戳：通过 setter 函数设置 */
     inode_set_atime(inode, (time64_t)le32_to_cpu(raw->i_atime), 0);
     inode_set_mtime(inode, (time64_t)le32_to_cpu(raw->i_mtime), 0);
     inode_set_ctime(inode, (time64_t)le32_to_cpu(raw->i_ctime), 0);
@@ -74,34 +84,310 @@ struct inode *ext2_sim_iget(struct super_block *sb, uint16_t ino)
     return inode;
 }
 
+/* ═════════════════════════════════════════════════════════════
+ *  write_inode — 将 VFS inode 写回磁盘
+ *  CLAUDE.md § 4.5.2
+ *
+ *  注意：只写 VFS 字段（mode/uid/gid/size/blocks/nlink/时间），
+ *  不修改 i_block[]（i_block 由 create/mkdir/add_entry 直接管理）。
+ * ═════════════════════════════════════════════════════════════ */
+
 int ext2_sim_write_inode(struct inode *inode, struct writeback_control *wbc)
 {
-    /* TODO: Phase 4 — CLAUDE.md § 4.5.2 */
+    struct super_block *sb = inode->i_sb;
+    struct ext2_sim_inode_disk *raw;
+    struct buffer_head *bh;
+
+    bh = sb_bread(sb, EXT2_SIM_INODE_BLOCK(inode->i_ino));
+    if (!bh)
+        return -EIO;
+
+    raw = (struct ext2_sim_inode_disk *)(bh->b_data
+          + EXT2_SIM_INODE_OFFSET(inode->i_ino));
+
+    raw->i_mode        = cpu_to_le16(inode->i_mode);
+    raw->i_uid         = cpu_to_le16(i_uid_read(inode));
+    raw->i_gid         = cpu_to_le16(i_gid_read(inode));
+    raw->i_size        = cpu_to_le32(inode->i_size);
+    raw->i_blocks      = cpu_to_le16(inode->i_blocks);
+    raw->i_links_count = cpu_to_le16(inode->i_nlink);
+    raw->i_atime       = cpu_to_le32((__u32)inode_get_atime_sec(inode));
+    raw->i_mtime       = cpu_to_le32((__u32)inode_get_mtime_sec(inode));
+    raw->i_ctime       = cpu_to_le32((__u32)inode_get_ctime_sec(inode));
+
+    mark_buffer_dirty(bh);
+    brelse(bh);
+
     return 0;
 }
 
-/* ── VFS inode_operations 回调 ───────────────────────────── */
+/* ═════════════════════════════════════════════════════════════
+ *  lookup — 目录查找（任何路径解析都触发）
+ *  CLAUDE.md § 4.5.3
+ * ═════════════════════════════════════════════════════════════ */
 
 struct dentry *ext2_sim_lookup(struct inode *dir, struct dentry *dentry,
                                unsigned int flags)
 {
-    /* TODO: Phase 4 — CLAUDE.md § 4.5.3 */
-    return NULL;
+    struct ext2_sim_dir_entry_disk de;
+    struct buffer_head *bh;
+    struct inode *inode;
+    int ret;
+
+    if (dentry->d_name.len > EXT2_SIM_NAME_LEN)
+        return ERR_PTR(-ENAMETOOLONG);
+
+    ret = ext2_sim_dir_find_entry(dir, dentry->d_name.name,
+                                   dentry->d_name.len, &de, &bh);
+    if (ret != 0) {
+        /* 条目不存在 → 负 dentry */
+        return d_splice_alias(NULL, dentry);
+    }
+
+    inode = ext2_sim_iget(dir->i_sb, le16_to_cpu(de.inode));
+    brelse(bh);
+
+    if (IS_ERR(inode))
+        return ERR_CAST(inode);
+
+    return d_splice_alias(inode, dentry);
 }
+
+/* ═════════════════════════════════════════════════════════════
+ *  create — 创建普通文件 (touch / open O_CREAT)
+ *  CLAUDE.md § 4.5.4
+ * ═════════════════════════════════════════════════════════════ */
 
 int ext2_sim_create(struct mnt_idmap *idmap, struct inode *dir,
                     struct dentry *dentry, umode_t mode, bool excl)
 {
-    /* TODO: Phase 4 — CLAUDE.md § 4.5.4 */
-    return -ENOSYS;
+    struct super_block *sb = dir->i_sb;
+    struct ext2_sim_inode_disk *raw;
+    struct buffer_head *bh;
+    struct inode *inode;
+    uint16_t ino;
+    time64_t now;
+
+    /* O_EXCL: 文件已存在则返回 -EEXIST */
+    if (excl) {
+        struct ext2_sim_dir_entry_disk dummy;
+        struct buffer_head *tmp;
+        if (ext2_sim_dir_find_entry(dir, dentry->d_name.name,
+                                     dentry->d_name.len, &dummy, &tmp) == 0) {
+            brelse(tmp);
+            return -EEXIST;
+        }
+    }
+
+    /* 1. 分配新 inode */
+    ino = ext2_sim_ialloc(sb);
+    if (ino == 0)
+        return -ENOSPC;
+
+    /* 2. 初始化磁盘 inode */
+    raw = read_disk_inode(sb, ino, &bh);
+    if (!raw)
+        return -EIO;
+
+    memset(raw, 0, sizeof(*raw));
+    now = ktime_get_real_seconds();
+    raw->i_mode        = cpu_to_le16(mode);              /* mode 含 S_IFREG */
+    raw->i_uid         = 0;  /* 由 inode_init_owner 覆盖 */
+    raw->i_gid         = 0;
+    raw->i_links_count = cpu_to_le16(1);
+    raw->i_size        = 0;
+    raw->i_blocks      = 0;
+    raw->i_atime       = cpu_to_le32((__u32)now);
+    raw->i_ctime       = cpu_to_le32((__u32)now);
+    raw->i_mtime       = cpu_to_le32((__u32)now);
+    /* i_block 已在 memset 中清零 */
+
+    mark_buffer_dirty(bh);
+    brelse(bh);
+
+    /* 3. 在父目录中新增条目 */
+    {
+        int err = ext2_sim_dir_add_entry(dir, dentry->d_name.name,
+                                          dentry->d_name.len,
+                                          ino, EXT2_SIM_FT_FILE);
+        if (err) {
+            ext2_sim_ifree(sb, ino);
+            return err;
+        }
+    }
+
+    /* 4. 获取 VFS inode 并设置正确的 uid/gid */
+    inode = ext2_sim_iget(sb, ino);
+    if (IS_ERR(inode)) {
+        /* 回滚？inode 已分配且已加入目录，难以回滚干净。先报错。 */
+        return PTR_ERR(inode);
+    }
+
+    inode_init_owner(idmap, inode, dir, mode);
+
+    /* 将 inode_init_owner 设置的 uid/gid 立即持久化到磁盘 */
+    {
+        struct buffer_head *bh2;
+        struct ext2_sim_inode_disk *raw2;
+        bh2 = sb_bread(sb, EXT2_SIM_INODE_BLOCK(ino));
+        if (bh2) {
+            raw2 = (struct ext2_sim_inode_disk *)(bh2->b_data
+                   + EXT2_SIM_INODE_OFFSET(ino));
+            raw2->i_uid = cpu_to_le16(i_uid_read(inode));
+            raw2->i_gid = cpu_to_le16(i_gid_read(inode));
+            mark_buffer_dirty(bh2);
+            brelse(bh2);
+        }
+    }
+
+    mark_inode_dirty(inode);
+    d_instantiate(dentry, inode);
+
+    return 0;
 }
+
+/* ═════════════════════════════════════════════════════════════
+ *  mkdir — 创建子目录
+ *  CLAUDE.md § 4.5.5
+ *
+ *  v7.x 注意：返回类型为 struct dentry *（非 int）。
+ *  成功返回 dentry，失败返回 ERR_PTR(-errno)。
+ * ═════════════════════════════════════════════════════════════ */
 
 struct dentry *ext2_sim_mkdir(struct mnt_idmap *idmap, struct inode *dir,
                                struct dentry *dentry, umode_t mode)
 {
-    /* TODO: Phase 4 — CLAUDE.md § 4.5.5 */
-    return ERR_PTR(-ENOSYS);
+    struct super_block *sb = dir->i_sb;
+    struct ext2_sim_sb_info *sbi = EXT2_SIM_SB(sb);
+    struct ext2_sim_inode_disk *raw;
+    struct ext2_sim_dir_entry_disk *de;
+    struct buffer_head *bh, *dir_bh;
+    struct inode *inode;
+    struct ext2_sim_group_desc_disk *gd;
+    uint16_t ino, block_rel;
+    time64_t now;
+    int err;
+
+    /* 1. 分配 inode 和目录数据块 */
+    ino = ext2_sim_ialloc(sb);
+    if (ino == 0)
+        return ERR_PTR(-ENOSPC);
+
+    block_rel = ext2_sim_balloc(sb);
+    if (block_rel == 0) {
+        ext2_sim_ifree(sb, ino);
+        return ERR_PTR(-ENOSPC);
+    }
+
+    /* 2. 初始化磁盘 inode */
+    raw = read_disk_inode(sb, ino, &bh);
+    if (!raw) {
+        ext2_sim_bfree(sb, block_rel);
+        ext2_sim_ifree(sb, ino);
+        return ERR_PTR(-EIO);
+    }
+
+    memset(raw, 0, sizeof(*raw));
+    now = ktime_get_real_seconds();
+    raw->i_mode        = cpu_to_le16(S_IFDIR | mode);
+    raw->i_uid         = 0;
+    raw->i_gid         = 0;
+    raw->i_links_count = cpu_to_le16(2);           /* . + 父目录的 .. */
+    raw->i_size        = cpu_to_le32(32);          /* . 和 .. 各 16 字节 */
+    raw->i_blocks      = cpu_to_le16(1);
+    raw->i_block[0]    = cpu_to_le16(block_rel);
+    raw->i_atime       = cpu_to_le32((__u32)now);
+    raw->i_ctime       = cpu_to_le32((__u32)now);
+    raw->i_mtime       = cpu_to_le32((__u32)now);
+
+    mark_buffer_dirty(bh);
+    brelse(bh);
+
+    /* 3. 初始化目录数据块（. 和 ..） */
+    dir_bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + block_rel);
+    if (!dir_bh) {
+        ext2_sim_bfree(sb, block_rel);
+        ext2_sim_ifree(sb, ino);
+        return ERR_PTR(-EIO);
+    }
+
+    memset(dir_bh->b_data, 0, EXT2_SIM_BLOCK_SIZE);
+
+    /* 条目 0: "." */
+    de = (struct ext2_sim_dir_entry_disk *)dir_bh->b_data;
+    de->inode     = cpu_to_le16(ino);
+    de->rec_len   = cpu_to_le16(16);
+    de->name_len  = cpu_to_le16(1);
+    de->file_type = EXT2_SIM_FT_DIR;
+    de->name[0]   = '.';
+
+    /* 条目 1: ".." — 指向父目录 */
+    de = (struct ext2_sim_dir_entry_disk *)(dir_bh->b_data + 16);
+    de->inode     = cpu_to_le16(dir->i_ino);
+    de->rec_len   = cpu_to_le16(16);   /* 统一 16 字节对齐 */
+    de->name_len  = cpu_to_le16(2);
+    de->file_type = EXT2_SIM_FT_DIR;
+    de->name[0]   = '.';
+    de->name[1]   = '.';
+
+    mark_buffer_dirty(dir_bh);
+    brelse(dir_bh);
+
+    /* 4. 递增组描述符的已分配目录计数 */
+    gd = (struct ext2_sim_group_desc_disk *)sbi->s_gdbh->b_data;
+    gd->bg_used_dirs_count = cpu_to_le16(
+        le16_to_cpu(gd->bg_used_dirs_count) + 1);
+    mark_buffer_dirty(sbi->s_gdbh);
+
+    /* 5. 在父目录中新增条目 */
+    err = ext2_sim_dir_add_entry(dir, dentry->d_name.name,
+                                  dentry->d_name.len,
+                                  ino, EXT2_SIM_FT_DIR);
+    if (err) {
+        /* 回滚已分配的资源 */
+        {
+            struct ext2_sim_group_desc_disk *g;
+            g = (struct ext2_sim_group_desc_disk *)sbi->s_gdbh->b_data;
+            g->bg_used_dirs_count = cpu_to_le16(
+                le16_to_cpu(g->bg_used_dirs_count) - 1);
+            mark_buffer_dirty(sbi->s_gdbh);
+        }
+        ext2_sim_bfree(sb, block_rel);
+        ext2_sim_ifree(sb, ino);
+        return ERR_PTR(err);
+    }
+
+    /* 6. 获取 VFS inode，设置 uid/gid */
+    inode = ext2_sim_iget(sb, ino);
+    if (IS_ERR(inode)) {
+        /* 资源已部分分配，难以完全回滚 */
+        return ERR_CAST(inode);
+    }
+
+    inode_init_owner(idmap, inode, dir, S_IFDIR | mode);
+
+    /* 将 inode_init_owner 设置的 uid/gid 立即持久化到磁盘 */
+    {
+        struct buffer_head *bh2;
+        struct ext2_sim_inode_disk *raw2;
+        bh2 = sb_bread(sb, EXT2_SIM_INODE_BLOCK(ino));
+        if (bh2) {
+            raw2 = (struct ext2_sim_inode_disk *)(bh2->b_data
+                   + EXT2_SIM_INODE_OFFSET(ino));
+            raw2->i_uid = cpu_to_le16(i_uid_read(inode));
+            raw2->i_gid = cpu_to_le16(i_gid_read(inode));
+            mark_buffer_dirty(bh2);
+            brelse(bh2);
+        }
+    }
+
+    mark_inode_dirty(inode);
+    d_instantiate(dentry, inode);
+
+    return dentry;
 }
+
+/* ── unlink / rmdir（阶段 7 实现）───────────────────────────── */
 
 int ext2_sim_unlink(struct inode *dir, struct dentry *dentry)
 {
