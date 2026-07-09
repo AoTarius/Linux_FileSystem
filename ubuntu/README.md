@@ -1,6 +1,6 @@
 # EXT2 File System — Ubuntu 内核模块版本
 
-在 Linux VFS（虚拟文件系统）框架下注册的 ext2 文件系统内核模块。直接操作块设备（如 `/dev/loop0`），被系统原生的 `ls`、`cat`、`touch` 等命令调用，而非自建 shell。
+在 Linux VFS（虚拟文件系统）框架下注册的 ext2 文件系统内核模块。直接操作块设备（如 `/dev/loopN`），被系统原生的 `ls`、`cat`、`touch` 等命令调用，而非自建 shell。
 
 ## 与 Windows_macOS 版本的关系
 
@@ -118,11 +118,12 @@ VFS:       vfs_create()
 dd if=/dev/zero of=./Ext2 bs=512 count=4612
 
 # 2. 挂载为循环设备（用普通文件模拟块设备）
-sudo losetup /dev/loop0 ./Ext2
+LOOP=$(sudo losetup -f)          # 自动获取空闲 loop 设备
+sudo losetup $LOOP ./Ext2       # 绑定
 
 # 3. 加载内核模块并挂载（模块内部应实现 mkfs，首次挂载自动格式化）
 sudo insmod ext2_sim.ko
-sudo mount -t ext2sim /dev/loop0 /mnt/ext2
+sudo mount -t ext2sim $LOOP /mnt/ext2
 
 # 5. 用系统命令操作
 ls /mnt/ext2
@@ -131,7 +132,7 @@ cat /mnt/ext2/readme.txt
 # 6. 卸载
 sudo umount /mnt/ext2
 sudo rmmod ext2_sim
-sudo losetup -d /dev/loop0
+sudo losetup -d $LOOP
 
 # 7. 查看内核日志
 dmesg | tail -50
@@ -148,21 +149,25 @@ dmesg | tail -50
 # 在 ubuntu/ 目录下执行
 cd /home/hollow/Linux_FileSystem/ubuntu
 
-# 清理
+# 清理（如果之前有残留）
 sudo umount /mnt/ext2 2>/dev/null
 sudo rmmod ext2_sim 2>/dev/null
-sudo losetup -d /dev/loop16 2>/dev/null
+LOOP=$(losetup -n -O NAME -l | head -1 2>/dev/null) && sudo losetup -d $LOOP 2>/dev/null
 
 # 编译
 make
 
-# 创建 2MB 磁盘镜像 + 挂载 loop 设备
+# 创建 2MB 磁盘镜像
 dd if=/dev/zero of=./test.img bs=512 count=4612
-sudo losetup /dev/loop16 ./test.img
+
+# 获取空闲 loop 设备并绑定
+LOOP=$(sudo losetup -f)
+echo "Using loop device: $LOOP"
+sudo losetup $LOOP ./test.img
 
 # 加载模块 + 挂载（首次自动格式化）
 sudo insmod ext2_sim.ko
-sudo mount -t ext2sim /dev/loop16 /mnt/ext2
+sudo mount -t ext2sim $LOOP /mnt/ext2
 
 # 开放权限方便体验
 sudo chmod 777 /mnt/ext2
@@ -174,20 +179,24 @@ sudo chmod 777 /mnt/ext2
 # 查看空目录
 ls -la /mnt/ext2
 
-# 创建空文件
-touch /mnt/ext2/readme.txt
+# 创建空文件(文件名有长度限制，需要短于8字符)
+touch /mnt/ext2/readme
 ls -la /mnt/ext2
 
 # 写入内容
-echo "Hello EXT2 File System!" > /mnt/ext2/readme.txt
-cat /mnt/ext2/readme.txt
+echo "Hello EXT2 File System!" > /mnt/ext2/readme
+cat /mnt/ext2/readme
+
+# 覆盖写入
+echo "Hello again!" > /mnt/ext2/readme
+cat /mnt/ext2/readme
 
 # 追加写入
-echo "This is line two." >> /mnt/ext2/readme.txt
-cat /mnt/ext2/readme.txt
+echo "This is line two." >> /mnt/ext2/readme
+cat /mnt/ext2/readme
 
 # 查看属性（inode 号、权限、时间戳、链接数）
-stat /mnt/ext2/readme.txt
+stat /mnt/ext2/readme
 ```
 
 ### 第三步：目录操作
@@ -213,7 +222,7 @@ df /mnt/ext2
 
 # 删除文件
 rm /mnt/ext2/docs/sub/note.txt
-rm /mnt/ext2/readme.txt
+rm /mnt/ext2/readme
 
 # 删除空目录
 rmdir /mnt/ext2/docs/sub
@@ -242,10 +251,11 @@ stat /mnt/ext2/bigfile
 
 ```bash
 # 卸载
+# cd ~ 如果在mnt目录内就先出来
 sudo umount /mnt/ext2
 
-# 重新挂载
-sudo mount -t ext2sim /dev/loop16 /mnt/ext2
+# 重新挂载（使用同一个 loop 设备 $LOOP）
+sudo mount -t ext2sim $LOOP /mnt/ext2
 
 # 数据全部还在
 ls -la /mnt/ext2
@@ -256,12 +266,12 @@ cat /mnt/ext2/bigfile | wc -c    # 应显示 1536
 
 ```bash
 # 查看模块运行日志
-dmesg | grep ext2sim: | tail -20
+sudo dmesg | grep ext2sim: | tail -20
 
 # 完全清理
 sudo umount /mnt/ext2
 sudo rmmod ext2_sim
-sudo losetup -d /dev/loop16
+sudo losetup -d $LOOP
 ```
 
 ### 功能清单速查

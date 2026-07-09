@@ -154,6 +154,10 @@ int ext2_sim_dir_add_entry(struct inode *dir, const char *name, int namelen,
     /* fall through 到 fill_entry */
 
 fill_entry:
+    /* 安全截断：文件名不超过 EXT2_SIM_NAME_LEN 字节 */
+    if (namelen > EXT2_SIM_NAME_LEN)
+        namelen = EXT2_SIM_NAME_LEN;
+
     /* 填充目录项 */
     de->inode     = cpu_to_le16(ino);
     de->rec_len   = cpu_to_le16(16);

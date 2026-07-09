@@ -168,6 +168,10 @@ int ext2_sim_create(struct mnt_idmap *idmap, struct inode *dir,
     uint16_t ino;
     time64_t now;
 
+    /* 文件名过长检查 */
+    if (dentry->d_name.len > EXT2_SIM_NAME_LEN)
+        return -ENAMETOOLONG;
+
     /* O_EXCL: 文件已存在则返回 -EEXIST */
     if (excl) {
         struct ext2_sim_dir_entry_disk dummy;
@@ -267,6 +271,10 @@ struct dentry *ext2_sim_mkdir(struct mnt_idmap *idmap, struct inode *dir,
     uint16_t ino, block_rel;
     time64_t now;
     int err;
+
+    /* 文件名过长检查 */
+    if (dentry->d_name.len > EXT2_SIM_NAME_LEN)
+        return ERR_PTR(-ENAMETOOLONG);
 
     /* 1. 分配 inode 和目录数据块 */
     ino = ext2_sim_ialloc(sb);

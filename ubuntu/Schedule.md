@@ -186,8 +186,9 @@ sudo mkdir -p /mnt/ext2
 
 # 尝试挂载（此时还没有磁盘镜像和块设备，所以用任意 loop 设备测试即可）
 # 这一步会失败——这正是预期的！
-sudo mount -t ext2sim /dev/loop0 /mnt/ext2 2>&1
-# 预期输出: mount: /mnt/ext2: wrong fs type, bad option, bad superblock on /dev/loop0, ...
+LOOP=$(sudo losetup -f)
+sudo mount -t ext2sim $LOOP /mnt/ext2 2>&1
+# 预期输出: mount: /mnt/ext2: wrong fs type, bad option, bad superblock on $LOOP, ...
 
 dmesg | tail -3
 # 预期看到 fill_super 被调用但返回 -EINVAL 的日志
