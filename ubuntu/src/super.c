@@ -360,12 +360,15 @@ int ext2_sim_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
     struct super_block *sb = dentry->d_sb;
     struct ext2_sim_sb_info *sbi = EXT2_SIM_SB(sb);
+    struct ext2_sim_super_block_disk *sb_disk;
     struct ext2_sim_group_desc_disk *gd;
 
+    sb_disk = (struct ext2_sim_super_block_disk *)sbi->s_sbh->b_data;
     gd = (struct ext2_sim_group_desc_disk *)sbi->s_gdbh->b_data;
 
     buf->f_type    = 0xEF53;
     buf->f_bsize   = EXT2_SIM_BLOCK_SIZE;
+    buf->f_frsize  = EXT2_SIM_BLOCK_SIZE;
     buf->f_blocks  = EXT2_SIM_DATA_BLOCK_COUNTS;
     buf->f_bfree   = le16_to_cpu(gd->bg_free_blocks_count);
     buf->f_bavail  = buf->f_bfree;
@@ -374,6 +377,9 @@ int ext2_sim_statfs(struct dentry *dentry, struct kstatfs *buf)
     buf->f_namelen = EXT2_SIM_NAME_LEN;
     buf->f_fsid.val[0] = 0;
     buf->f_fsid.val[1] = 0;
+
+    printk(KERN_INFO "ext2sim: statfs: blocks=%llu free=%llu inodes=%llu free=%llu\n",
+           buf->f_blocks, buf->f_bfree, buf->f_files, buf->f_ffree);
 
     return 0;
 }

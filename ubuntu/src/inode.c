@@ -407,6 +407,23 @@ int ext2_sim_unlink(struct inode *dir, struct dentry *dentry)
 
     /* 递减链接数（1 → 0，触发 evict_inode 回收） */
     set_nlink(inode, inode->i_nlink - 1);
+
+    /* 链接数归零时，记录删除时间 */
+    if (inode->i_nlink == 0) {
+        struct buffer_head *bh2;
+        struct ext2_sim_inode_disk *raw2;
+        time64_t now = ktime_get_real_seconds();
+
+        bh2 = sb_bread(dir->i_sb, EXT2_SIM_INODE_BLOCK(inode->i_ino));
+        if (bh2) {
+            raw2 = (struct ext2_sim_inode_disk *)(bh2->b_data
+                   + EXT2_SIM_INODE_OFFSET(inode->i_ino));
+            raw2->i_dtime = cpu_to_le32((__u32)now);
+            mark_buffer_dirty(bh2);
+            brelse(bh2);
+        }
+    }
+
     mark_inode_dirty(inode);
 
     return 0;
@@ -438,6 +455,23 @@ int ext2_sim_rmdir(struct inode *dir, struct dentry *dentry)
 
     /* 目录已删除，nlink = 0 触发 evict_inode 回收资源 */
     set_nlink(inode, 0);
+
+    /* 记录删除时间 */
+    {
+        struct buffer_head *bh2;
+        struct ext2_sim_inode_disk *raw2;
+        time64_t now = ktime_get_real_seconds();
+
+        bh2 = sb_bread(dir->i_sb, EXT2_SIM_INODE_BLOCK(inode->i_ino));
+        if (bh2) {
+            raw2 = (struct ext2_sim_inode_disk *)(bh2->b_data
+                   + EXT2_SIM_INODE_OFFSET(inode->i_ino));
+            raw2->i_dtime = cpu_to_le32((__u32)now);
+            mark_buffer_dirty(bh2);
+            brelse(bh2);
+        }
+    }
+
     mark_inode_dirty(inode);
 
     /* 递减组描述符的已分配目录计数 */

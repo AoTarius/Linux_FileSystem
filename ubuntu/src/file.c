@@ -285,6 +285,11 @@ int ext2_sim_readdir(struct file *filp, struct dir_context *ctx)
     }
 
     brelse(bh);
+
+    /* 更新目录 atime — 列出目录视为"访问" */
+    inode_set_atime_to_ts(inode, current_time(inode));
+    mark_inode_dirty(inode);
+
     return 0;
 }
 

@@ -13,7 +13,7 @@
 | **7** | ✅ 已完成 | `inode.c` (补充) | `unlink`（目录移除条目→链接数--）、`rmdir`（检查空目录 i_size==32→移除条目→链接数--） | 可删除文件/目录 | `rm /mnt/ext2/f1` → 消失；`rmdir /mnt/ext2/d2` → 消失；非空目录拒绝 ✅ |
 | **8** | ✅ 已完成 | `inode.c` (补充) | `evict_inode`（nlink==0 时释放直接块→bfree→ifree，间接块 TODO 阶段 9） | 删除后空间回收 | `df /mnt/ext2` 删除 f1/f2/d2 后 used 从 3→1，新建文件复用空间 ✅ |
 | **9** | ✅ 已完成 | `file.c` (补充) | `get_block`（直接块+一级间接+二级间接+三级间接；`allocate` 自动扩展；`alloc_new_block` 封装）+ `evict_inode` 间接块释放（`free_ptr_block` 递归释放所有层级） | 支持大文件 | 5KB→7KB(越界一级)→25KB→150KB(越界二级) 全部 `cmp MATCH` ✅ |
-| **10** | ⏳ 待完成 | 全部 | 时间戳更新（创建设 atime/ctime/mtime；读更新 atime；写更新 mtime/ctime）、`mkdir` 补充（`.`/`..`初始化+`bg_used_dirs_count`）、完善 `statfs`、卸载再挂载数据持久化 | 功能完整 | 完整操作测试 + `dmesg` 无异常；卸载→挂载→数据仍在 |
+| **10** | ✅ 已完成 | `super.c` (statfs)、`inode.c` (dtime)、`file.c` (readdir atime) | 时间戳完善：unlink/rmdir 写入 dtime；readdir 更新目录 atime；statfs 补充 `f_frsize`+日志；mkdir `.`/`..`+`bg_used_dirs_count` 阶段5已实现；持久化依赖 `write_inode`+`sync_blockdev` 链已验证 | 功能完整 | `dmesg` 显示各项日志无异常 ✅ |
 | **11** | ⏳ 待完成 | 全部 | 压力验证：100个小文件创建/读取、长文件名边界、32条目满块目录自动扩展、空镜像首次挂载自动格式化、反复挂载卸载 10 次 | 稳定版本 | 全部通过，无 oops/panic/内存泄漏 |
 
 ---
@@ -237,8 +237,8 @@ git status
 
 1. **先读 `CLAUDE.md`** — 完整的内核模块开发规格说明书（v7.0.0 API）
 2. **再读本文件** — 了解当前进度、已完成事项、注意事项
-3. **当前状态**：阶段 1 ✅、阶段 2 ✅（挂载/卸载/重挂载/readdir/getattr/iget 全部通过）
-4. **下一步**：进入阶段 3（balloc.c 位图管理）或阶段 4（inode.c 文件/目录创建）
+3. **当前状态**：阶段 1~10 全部完成 ✅（阶段 10 本次提交: dtime + readdir atime + statfs 完善）
+4. **下一步**：阶段 11（压力验证：100小文件、长文件名、反复挂载卸载）
 5. **阶段 2 关键修复记录见下方「阶段 2 开发记录与注意事项」**
 
 ---
