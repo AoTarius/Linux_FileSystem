@@ -21,8 +21,17 @@ Linux_FileSystem/
 │   ├── Makefile              # GCC/Clang 构建
 │   └── README.md             # 详细文档
 │
-├── ubuntu/                   # [待开发] Linux 内核模块版本
-│   └── ...                   # VFS 注册 → 操作真块设备
+├── ubuntu/                   # Linux 内核模块版本
+│   ├── include/              # ext2 磁盘 & 内存结构头文件
+│   ├── src/                  # 源文件（~2,200 行 C）
+│   │   ├── super.c           # 挂载/卸载/格式化/statfs
+│   │   ├── inode.c           # inode 生命周期、文件/目录的增删查
+│   │   ├── file.c            # 文件读写、间接块寻址、readdir
+│   │   ├── balloc.c          # 块/inode 位图分配与回收
+│   │   └── dir.c             # 目录项查找/添加/删除
+│   ├── Makefile              # Kbuild 内核模块构建
+│   ├── README.md             # 详细文档 + 完整体验流程
+│   └── Schedule.md           # 11 阶段开发计划（已完成 10/11）
 │
 ├── .vscode/                  # VS Code IntelliSense 配置
 ├── .gitignore
@@ -36,9 +45,9 @@ Linux_FileSystem/
 | | Windows_macOS | ubuntu（内核模块） |
 |---|---|---|
 | **实现方式** | 纯用户态 C 程序 | Linux 内核模块，注册到 VFS |
-| **磁盘操作** | `fread`/`fwrite` → 普通文件 `./Ext2` | `sb_bread()` → 块设备 `/dev/loop0` |
-| **接口** | 自己写的 shell 循环解析命令 | 内核调度，系统 `ls`/`cat` 等直接可用 |
-| **代码关系** | — | 无依赖，各自独立实现 |
+| **磁盘操作** | `fread`/`fwrite` → 普通文件 `./Ext2` | `sb_bread()` → 块设备 `/dev/loopN` |
+| **接口** | 自己写的 shell 循环解析命令 | VFS 回调，系统 `ls`/`cat`/`touch` 直接可用 |
+| **进展** | 已完成 ✅ | 阶段 10/11 ✅ |
 
 ## 磁盘布局
 
