@@ -14,6 +14,7 @@
 | **8** | ✅ 已完成 | `inode.c` (补充) | `evict_inode`（nlink==0 时释放直接块→bfree→ifree，间接块 TODO 阶段 9） | 删除后空间回收 | `df /mnt/ext2` 删除 f1/f2/d2 后 used 从 3→1，新建文件复用空间 ✅ |
 | **9** | ✅ 已完成 | `file.c` (补充) | `get_block`（直接块+一级间接+二级间接+三级间接；`allocate` 自动扩展；`alloc_new_block` 封装）+ `evict_inode` 间接块释放（`free_ptr_block` 递归释放所有层级） | 支持大文件 | 5KB→7KB(越界一级)→25KB→150KB(越界二级) 全部 `cmp MATCH` ✅ |
 | **10** | ✅ 已完成 | `super.c` (statfs)、`inode.c` (dtime)、`file.c` (readdir atime) | 时间戳完善：unlink/rmdir 写入 dtime；readdir 更新目录 atime；statfs 补充 `f_frsize`+日志；mkdir `.`/`..`+`bg_used_dirs_count` 阶段5已实现；持久化依赖 `write_inode`+`sync_blockdev` 链已验证 | 功能完整 | `dmesg` 显示各项日志无异常 ✅ |
+| **10.5** | ✅ 已完成 | `inode.c` (rename, setattr) | `setattr`：chmod/chown/truncate，一个回调三个命令，通过 `iattr->ia_valid` 位掩码区分操作；`rename`：mv 重命名+跨目录移动，目录移动时自动更新 `..` 指向新父目录+nlink 调整，支持 RENAME_NOREPLACE 标志，拒绝覆盖非空目录 | mv/chmod/chown/truncate 全可用 | `chmod 755 file` → `stat` 验证；`mv a b` → `ls` 验证；`mv dir1 dir2` → 跨目录移动目录成功 |
 | **11** | ⏳ 待完成 | 全部 | 压力验证：100个小文件创建/读取、长文件名边界、32条目满块目录自动扩展、空镜像首次挂载自动格式化、反复挂载卸载 10 次 | 稳定版本 | 全部通过，无 oops/panic/内存泄漏 |
 
 ---
@@ -238,7 +239,7 @@ git status
 
 1. **先读 `CLAUDE.md`** — 完整的内核模块开发规格说明书（v7.0.0 API）
 2. **再读本文件** — 了解当前进度、已完成事项、注意事项
-3. **当前状态**：阶段 1~10 全部完成 ✅（阶段 10 本次提交: dtime + readdir atime + statfs 完善）
+3. **当前状态**：阶段 1~10.5 全部完成 ✅（阶段 10.5: rename + setattr，mv/chmod/chown/truncate 可用）
 4. **下一步**：阶段 11（压力验证：100小文件、长文件名、反复挂载卸载）
 5. **阶段 2 关键修复记录见下方「阶段 2 开发记录与注意事项」**
 

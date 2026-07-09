@@ -14,5 +14,6 @@ Module.symvers
 modules.order
 .module-common.o
 
-# Disk image (generated)
+# Disk images (generated)
 Ext2
+*.img

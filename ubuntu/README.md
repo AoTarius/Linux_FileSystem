@@ -97,7 +97,37 @@ df /mnt/ext2
 ls -la /mnt/ext2
 ```
 
-### 第五步：大数据块读写
+### 第五步：重命名、权限与截断
+
+```bash
+# ── mv：重命名 ──
+touch /mnt/ext2/oldname
+mv /mnt/ext2/oldname /mnt/ext2/newname
+ls /mnt/ext2                        # oldname 消失，newname 出现
+
+# ── mv：跨目录移动 ──
+mkdir /mnt/ext2/d1 /mnt/ext2/d2
+touch /mnt/ext2/d1/file
+mv /mnt/ext2/d1/file /mnt/ext2/d2/
+ls /mnt/ext2/d2                     # 看到 file
+
+# ── mv：移动目录（自动更新 ..） ──
+mv /mnt/ext2/d1 /mnt/ext2/d2/
+ls /mnt/ext2/d2/d1                  # d1 变成 d2 的子目录
+
+# ── chmod：改权限 ──
+touch /mnt/ext2/script
+chmod 755 /mnt/ext2/script
+stat /mnt/ext2/script               # Access: (0755/-rwxr-xr-x)
+
+# ── truncate：截断文件 ──
+echo "some data here" > /mnt/ext2/cutme
+truncate -s 0 /mnt/ext2/cutme
+stat /mnt/ext2/cutme                # Size: 0
+cat /mnt/ext2/cutme                 # 空
+```
+
+### 第六步：大数据块读写
 
 ```bash
 # 写入跨越多个数据块的文件（3 × 512 字节）
@@ -111,7 +141,7 @@ cmp /mnt/ext2/bigfile /tmp/readback.bin && echo "DATA MATCH ✓"
 stat /mnt/ext2/bigfile
 ```
 
-### 第六步：持久化验证
+### 第七步：持久化验证
 
 ```bash
 # 卸载
@@ -126,7 +156,7 @@ ls -la /mnt/ext2
 cat /mnt/ext2/bigfile | wc -c    # 应显示 1536
 ```
 
-### 第七步：查看内核日志 & 清理
+### 第八步：查看内核日志 & 清理
 
 ```bash
 # 查看模块运行日志
@@ -152,12 +182,16 @@ sudo losetup -d $LOOP
 | 删除文件 | `rm` | ✅ |
 | 删除空目录 | `rmdir` | ✅ |
 | 非空目录保护 | `rmdir nonempty/` | ✅ |
+| 移动/重命名 | `mv` | ✅ |
+| 修改权限 | `chmod` | ✅ |
+| 修改属主 | `chown` | ✅ |
+| 截断文件 | `truncate` | ✅ |
 | 文件属性 | `stat` | ✅ |
 | 磁盘空间 | `df` | ✅ |
 | 卸载重挂载持久化 | `umount` → `mount` | ✅ |
 | 删除后空间回收 | `rm` → `df` | ✅ |
 | 大文件读写 (>512B) | `dd` → `cmp` | ✅ |
-| 大文件 (>6KB) | — | ⏳ 阶段 9 |
+| 间接块寻址 (>6KB) | — | ✅ |
 
 ## 与 Windows_macOS 版本的关系
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * inode.c — inode 操作：iget、write_inode、lookup、create、mkdir、
- *           unlink、rmdir、evict_inode
+ *           unlink、rmdir、rename、setattr、evict_inode
  */
 
 #include <linux/buffer_head.h>
@@ -491,6 +491,140 @@ int ext2_sim_rmdir(struct inode *dir, struct dentry *dentry)
     return 0;
 }
 
+/* ═════════════════════════════════════════════════════════════
+ *  setattr — chmod / chown / truncate
+ *  三个命令共用一个回调，通过 iattr->ia_valid 位掩码区分。
+ * ═════════════════════════════════════════════════════════════ */
+
+int ext2_sim_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
+                     struct iattr *attr)
+{
+    struct inode *inode = d_inode(dentry);
+    int error;
+
+    error = setattr_prepare(idmap, dentry, attr);
+    if (error)
+        return error;
+
+    if (attr->ia_valid & ATTR_SIZE) {
+        /* truncate: 截断/扩展文件大小 */
+        if (attr->ia_size != inode->i_size)
+            truncate_setsize(inode, attr->ia_size);
+    }
+
+    setattr_copy(idmap, inode, attr);
+    mark_inode_dirty(inode);
+
+    printk(KERN_INFO "ext2sim: setattr: ino=%lu mode=%o uid=%d gid=%d size=%lld\n",
+           inode->i_ino, inode->i_mode,
+           i_uid_read(inode), i_gid_read(inode), inode->i_size);
+
+    return 0;
+}
+
+/* ═════════════════════════════════════════════════════════════
+ *  rename — mv 命令（同文件系统内移动/重命名）
+ *  支持文件↔文件、目录↔空目录、RENAME_NOREPLACE 标志。
+ * ═════════════════════════════════════════════════════════════ */
+
+int ext2_sim_rename(struct mnt_idmap *idmap,
+                    struct inode *old_dir, struct dentry *old_dentry,
+                    struct inode *new_dir, struct dentry *new_dentry,
+                    unsigned int flags)
+{
+    struct inode *old_inode = d_inode(old_dentry);
+    struct inode *new_inode = d_inode(new_dentry);
+    struct super_block *sb = old_dir->i_sb;
+    struct ext2_sim_sb_info *sbi = EXT2_SIM_SB(sb);
+    int err;
+
+    if (flags & ~RENAME_NOREPLACE)
+        return -EINVAL;
+
+    /* 同名 → 无事可做 */
+    if (old_dentry == new_dentry)
+        return 0;
+
+    /* ── 目标已存在：先删除（overwrite） ── */
+    if (new_inode) {
+        if (flags & RENAME_NOREPLACE)
+            return -EEXIST;
+
+        if (S_ISDIR(new_inode->i_mode)) {
+            /* 只能覆盖空目录 */
+            if (new_inode->i_size != 32)
+                return -ENOTEMPTY;
+            /* 递减旧目标的目录计数 */
+            {
+                struct ext2_sim_group_desc_disk *gd;
+                gd = (struct ext2_sim_group_desc_disk *)sbi->s_gdbh->b_data;
+                gd->bg_used_dirs_count = cpu_to_le16(
+                    le16_to_cpu(gd->bg_used_dirs_count) - 1);
+                mark_buffer_dirty(sbi->s_gdbh);
+            }
+        }
+
+        err = ext2_sim_dir_remove_entry(new_dir, new_dentry->d_name.name,
+                                        new_dentry->d_name.len);
+        if (err)
+            return err;
+
+        set_nlink(new_inode, 0);
+        mark_inode_dirty(new_inode);
+    }
+
+    /* ── 从旧目录移除条目 ── */
+    err = ext2_sim_dir_remove_entry(old_dir, old_dentry->d_name.name,
+                                    old_dentry->d_name.len);
+    if (err)
+        return err;
+
+    /* ── 在新目录增加条目 ── */
+    {
+        uint8_t ftype = S_ISDIR(old_inode->i_mode)
+                        ? EXT2_SIM_FT_DIR : EXT2_SIM_FT_FILE;
+        err = ext2_sim_dir_add_entry(new_dir, new_dentry->d_name.name,
+                                      new_dentry->d_name.len,
+                                      old_inode->i_ino, ftype);
+        if (err) {
+            /* 回滚：把旧条目加回去 */
+            ext2_sim_dir_add_entry(old_dir, old_dentry->d_name.name,
+                                   old_dentry->d_name.len,
+                                   old_inode->i_ino, ftype);
+            return err;
+        }
+    }
+
+    /* ── 移动的是目录且跨目录 → 更新 ".." 指向新父目录 ── */
+    if (S_ISDIR(old_inode->i_mode) && old_dir != new_dir) {
+        struct buffer_head *bh;
+        struct ext2_sim_dir_entry_disk *de;
+        uint16_t logical0_rel;
+
+        logical0_rel = ext2_sim_get_block(old_inode, 0, 0);
+        bh = sb_bread(sb, EXT2_SIM_DATA_BLOCK_START + logical0_rel);
+        if (bh) {
+            de = (struct ext2_sim_dir_entry_disk *)(bh->b_data + 16);
+            de->inode = cpu_to_le16(new_dir->i_ino);
+            mark_buffer_dirty(bh);
+            brelse(bh);
+        }
+
+        /* 旧父目录 nlink--，新父目录 nlink++ */
+        set_nlink(old_dir, old_dir->i_nlink - 1);
+        mark_inode_dirty(old_dir);
+        set_nlink(new_dir, new_dir->i_nlink + 1);
+        mark_inode_dirty(new_dir);
+    }
+
+    printk(KERN_INFO "ext2sim: rename: ino=%lu %s → %s (old_dir=%lu new_dir=%lu)\n",
+           old_inode->i_ino,
+           old_dentry->d_name.name, new_dentry->d_name.name,
+           old_dir->i_ino, new_dir->i_ino);
+
+    return 0;
+}
+
 /* ── 辅助：释放一个装满 256 个指针的块，然后释放该块本身 ──────
  * 返回释放的数据块总数（不含该指针块本身）。
  */
@@ -630,7 +764,8 @@ void ext2_sim_evict_inode(struct inode *inode)
  * ═════════════════════════════════════════════════════════════ */
 
 const struct inode_operations ext2_sim_file_inode_operations = {
-    .getattr = ext2_sim_getattr,
+    .getattr  = ext2_sim_getattr,
+    .setattr  = ext2_sim_setattr,
 };
 
 const struct inode_operations ext2_sim_dir_inode_operations = {
@@ -639,5 +774,7 @@ const struct inode_operations ext2_sim_dir_inode_operations = {
     .unlink  = ext2_sim_unlink,
     .mkdir   = ext2_sim_mkdir,
     .rmdir   = ext2_sim_rmdir,
+    .rename  = ext2_sim_rename,
     .getattr = ext2_sim_getattr,
+    .setattr = ext2_sim_setattr,
 };

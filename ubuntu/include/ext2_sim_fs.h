@@ -145,6 +145,12 @@ struct dentry *ext2_sim_mkdir(struct mnt_idmap *idmap, struct inode *dir,
                                struct dentry *dentry, umode_t mode);
 int ext2_sim_unlink(struct inode *dir, struct dentry *dentry);
 int ext2_sim_rmdir(struct inode *dir, struct dentry *dentry);
+int ext2_sim_rename(struct mnt_idmap *idmap,
+                    struct inode *old_dir, struct dentry *old_dentry,
+                    struct inode *new_dir, struct dentry *new_dentry,
+                    unsigned int flags);
+int ext2_sim_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
+                     struct iattr *attr);
 
 /* ── file.c ───────────────────────────────────────────────── */
 uint16_t ext2_sim_get_block(struct inode *inode, uint16_t logical,
