@@ -66,12 +66,12 @@ sudo ./ext2sim_login
 #   New user registered! Welcome, bob! (uid=1000)
 #   → 进入 bash (uid=1000, gid=1000)
 
-touch /mnt/ext2/bob_file                  # 归属 bob
-stat /mnt/ext2/bob_file | grep Uid        # Uid: (1000/UNKNOWN)
+touch /mnt/ext2/bobFile                  # 归属 bob
+stat /mnt/ext2/bobFile | grep Uid        # Uid: (1000/UNKNOWN)
 
 # ── 权限隔离验证 ──
 cat /mnt/ext2/rootFile                    # Permission denied ← VFS 拒绝！
-echo "bob data" > /mnt/ext2/bob_file    # bob 自己的文件
+echo "bob data" > /mnt/ext2/bobFile    # bob 自己的文件
 
 exit
 # ──────────────────────────────────────
@@ -93,8 +93,20 @@ sudo ./ext2sim_login
 #   Login: root
 #   Password: root
 cat /mnt/ext2/rootFile                    # "secret" ← root 不受限
-cat /mnt/ext2/bob_file                    # "bob data" ← root 可读一切
+cat /mnt/ext2/bobFile                    # "bob data" ← root 可读一切
 exit
+```
+
+```bash
+# 登录后，ll 命令列出含物理块地址的详细信息（ls 保持系统原样）
+ll
+#
+#   items           owner    type    mode       blocks                   mtime            size
+#   ────────────────────────────────────────────────────────────────────────────────────────
+#   .               root     <DIR>   rwxr-xr-x  516                      2026-07-10 09:00  ----
+#   ..              root     <DIR>   rwxr-xr-x  516                      2026-07-10 09:00  ----
+#   rootFile        root     <FILE>  rw-------  517                      2026-07-10 09:01  14 bytes
+#   bobFile        bob      <FILE>  rw-r--r--  518                      2026-07-10 09:02  8 bytes
 ```
 
 ### 第三步：文件操作
@@ -211,7 +223,6 @@ stat /mnt/ext2/bigfile
 
 ```bash
 # 卸载
-# cd ~ 如果在mnt目录内就先出来
 sudo umount /mnt/ext2
 
 # 重新挂载（使用同一个 loop 设备 $LOOP）
@@ -241,7 +252,7 @@ sudo losetup -d $LOOP
 | 挂载（自动格式化） | `mount -t ext2sim` | ✅ |
 | 用户登录 & 注册 | `ext2sim_login` | ✅ |
 | 多用户权限隔离 | — | ✅ |
-| 列出目录 | `ls` | ✅ |
+| 列出目录（含物理块号） | `ls` / `ll` | ✅ |
 | 创建文件 | `touch` | ✅ |
 | 写入文件 | `echo > file` | ✅ |
 | 读取文件 | `cat` | ✅ |
@@ -306,6 +317,7 @@ ubuntu/
 │   ├── balloc.c                # 位图管理 → balloc / bfree / ialloc / ifree
 │   └── dir.c                   # 目录项辅助 → find_entry / add_entry / remove_entry
 ├── ext2sim_login.c             # 用户态登录程序（多用户认证）
+├── ext2sim_ls.c                # 用户态目录列表（含物理块地址）
 ├── Makefile                    # Kbuild（内核模块构建系统）
 └── README.md                   # 本文件
 ```

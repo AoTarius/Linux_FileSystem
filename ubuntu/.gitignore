@@ -16,6 +16,7 @@ modules.order
 
 # User-space tools (generated)
 ext2sim_login
+ext2sim_ls
 
 # Disk images (generated)
 Ext2

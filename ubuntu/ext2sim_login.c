@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 
 /* ── 磁盘几何常量（与内核模块、Windows_macOS 保持一致）─────────── */
 
@@ -384,30 +385,79 @@ int main(int argc, char **argv)
 
     close(fd);
 
-    /* ── 切换 uid/gid，启动 shell ───────── */
     printf("Starting shell as %s (uid=%u, gid=%u)...\n",
            users[idx].username, users[idx].uid, users[idx].gid);
     printf("Use 'exit' or Ctrl+D to logout.\n\n");
 
-    if (setgid(users[idx].gid) != 0) {
-        perror("setgid");
-        return 1;
-    }
-    if (setuid(users[idx].uid) != 0) {
-        perror("setuid");
-        return 1;
+    /*
+     * ⚠️ 先设置环境（此时仍是 root），再 drop 权限。
+     * 顺序至关重要：setuid 之后 readlink /proc/self/exe 会失败。
+     */
+
+    /* 将 ext2sim 工具目录加到 PATH */
+    {
+        char self[512], self_dir[512], new_path[1024];
+        ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+        if (n > 0) {
+            self[n] = '\0';
+            char *slash = strrchr(self, '/');
+            if (slash) {
+                size_t dlen = (size_t)(slash - self);
+                memcpy(self_dir, self, dlen);
+                self_dir[dlen] = '\0';
+                snprintf(new_path, sizeof(new_path),
+                         "%s:%s", self_dir, getenv("PATH") ?: "/usr/bin");
+                setenv("PATH", new_path, 1);
+            }
+        }
     }
 
-    /* 切换到 ext2 文件系统根目录 */
-    if (chdir("/mnt/ext2") != 0)
-        chdir("/");
-
-    /* 设置环境变量 */
     setenv("HOME", "/", 1);
     setenv("USER", users[idx].username, 1);
-    setenv("PS1", "\\u@ext2sim:\\w\\$ ", 1);
 
-    /* 启动交互式 shell */
+    /*
+     * 写临时 bashrc：
+     *   ll    → ext2sim_ls（含物理块地址的详细列表）
+     *   PS1   → 用实际用户名，不用 \u（\u 查宿主 /etc/passwd，会显示"无名氏"）
+     *   ls 保持系统原样不变。
+     */
+    {
+        char tmp_path[] = "/tmp/ext2sim_rc_XXXXXX";
+        int rc_fd = mkstemp(tmp_path);
+        if (rc_fd >= 0) {
+            dprintf(rc_fd,
+                "alias ll='ext2sim_ls'\n"
+                "export PS1='%s@ext2sim:\\w\\$ '\n",
+                users[idx].username
+            );
+            fchmod(rc_fd, 0644);  /* 让目标用户能读（否则 setuid 后 bash 无权加载） */
+            close(rc_fd);
+            setenv("HOME", "/", 1);
+            setenv("USER", users[idx].username, 1);
+
+            /* 切换到 ext2 文件系统根目录 */
+            if (chdir("/mnt/ext2") != 0)
+                chdir("/");
+
+            /* drop 权限 */
+            if (setgid(users[idx].gid) != 0) {
+                perror("setgid");
+                return 1;
+            }
+            if (setuid(users[idx].uid) != 0) {
+                perror("setuid");
+                return 1;
+            }
+
+            execl("/bin/bash", "bash", "--rcfile", tmp_path, NULL);
+        }
+    }
+
+    /* 回退：mkstemp 失败时走这里 */
+    if (chdir("/mnt/ext2") != 0) chdir("/");
+    setgid(users[idx].gid);
+    setuid(users[idx].uid);
+    setenv("PS1", "ext2sim:\\w\\$ ", 1);
     execl("/bin/bash", "bash", "--norc", NULL);
 
     /* execl 成功则不会到达这里 */
