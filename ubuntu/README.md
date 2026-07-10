@@ -2,7 +2,7 @@
 
 在 Linux VFS（虚拟文件系统）框架下注册的 ext2 文件系统内核模块。直接操作块设备（如 `/dev/loopN`），被系统原生的 `ls`、`cat`、`touch` 等命令调用，而非自建 shell。
 
-## 完整体验流程（当前实现进度：阶段 1-8 ✅）
+## 完整体验流程（当前实现进度：阶段 1~10.5 + 用户登录 ✅）
 
 以下脚本从零开始搭建文件系统并演示所有已实现功能。
 建议逐段复制到终端执行，观察每一步输出。
@@ -18,7 +18,7 @@ sudo umount /mnt/ext2 2>/dev/null
 sudo rmmod ext2_sim 2>/dev/null
 LOOP=$(losetup -n -O NAME -l | head -1 2>/dev/null) && sudo losetup -d $LOOP 2>/dev/null
 
-# 编译
+# 编译（内核模块 + 登录程序）
 make
 
 # 创建 2MB 磁盘镜像
@@ -37,10 +37,74 @@ sudo mount -t ext2sim $LOOP /mnt/ext2
 sudo chmod 777 /mnt/ext2
 ```
 
-### 第二步：文件操作
+### 第二步：登录 & 多用户权限验证
 
 ```bash
-# 查看空目录
+# 启动登录程序（以 root 身份首次登录）
+# 注意：挂载点必须在 login 之前以 root 打开权限，否则非 root 用户无法访问
+sudo chmod 777 /mnt/ext2
+
+# 登录为 root（格式化时预置，密码也是 root）
+sudo ./ext2sim_login
+# ── 交互界面 ──────────────────────────
+#   Login: root
+#   Password: root        ← 输入时不回显
+#   → 进入 bash (uid=0, gid=0)
+#
+#   root 登录后，创建的文件自动归属 root：
+touch /mnt/ext2/rootFile
+stat /mnt/ext2/rootFile | grep Uid   # Uid: (0/root)
+chmod 600 /mnt/ext2/rootFile
+echo "secret" > /mnt/ext2/rootFile
+exit                                  # 退出 root shell
+# ──────────────────────────────────────
+
+# ── 注册新用户 bob（首次输入不存在的用户名即自动注册）──
+sudo ./ext2sim_login
+#   Login: bob          ← 不存在的用户 → 自动注册！
+#   Password: ******      ← 设置密码（同时也是注册）
+#   New user registered! Welcome, bob! (uid=1000)
+#   → 进入 bash (uid=1000, gid=1000)
+
+touch /mnt/ext2/bob_file                  # 归属 bob
+stat /mnt/ext2/bob_file | grep Uid        # Uid: (1000/UNKNOWN)
+
+# ── 权限隔离验证 ──
+cat /mnt/ext2/rootFile                    # Permission denied ← VFS 拒绝！
+echo "bob data" > /mnt/ext2/bob_file    # bob 自己的文件
+
+exit
+# ──────────────────────────────────────
+
+# ── 老用户再次登录，密码验证生效 ──
+sudo ./ext2sim_login
+#   Login: bob
+#   Password: wrongpass
+#   Incorrect password.
+#   Password: ******       ← 正确密码
+#   Welcome back, bob!
+
+cat /mnt/ext2/rootFile                    # 仍是 Permission denied
+exit
+# ──────────────────────────────────────
+
+# ── root 登录可绕过一切权限 ──
+sudo ./ext2sim_login
+#   Login: root
+#   Password: root
+cat /mnt/ext2/rootFile                    # "secret" ← root 不受限
+cat /mnt/ext2/bob_file                    # "bob data" ← root 可读一切
+exit
+```
+
+### 第三步：文件操作
+
+```bash
+# 以 root 登录后操作
+sudo ./ext2sim_login
+#   Login: root / Password: root
+
+# 查看空目录（仅 . 和 ..）
 ls -la /mnt/ext2
 
 # 创建空文件(文件名有长度限制，需要短于8字符)
@@ -61,9 +125,11 @@ cat /mnt/ext2/readme
 
 # 查看属性（inode 号、权限、时间戳、链接数）
 stat /mnt/ext2/readme
+
+exit
 ```
 
-### 第三步：目录操作
+### 第四步：目录操作
 
 ```bash
 # 创建目录 + 嵌套
@@ -78,7 +144,7 @@ ls -laR /mnt/ext2
 rmdir /mnt/ext2/docs       # 应报错 "Directory not empty"
 ```
 
-### 第四步：删除与空间回收
+### 第五步：删除与空间回收
 
 ```bash
 # 查看当前磁盘使用
@@ -97,7 +163,7 @@ df /mnt/ext2
 ls -la /mnt/ext2
 ```
 
-### 第五步：重命名、权限与截断
+### 第六步：重命名、权限与截断
 
 ```bash
 # ── mv：重命名 ──
@@ -127,7 +193,7 @@ stat /mnt/ext2/cutme                # Size: 0
 cat /mnt/ext2/cutme                 # 空
 ```
 
-### 第六步：大数据块读写
+### 第七步：大数据块读写
 
 ```bash
 # 写入跨越多个数据块的文件（3 × 512 字节）
@@ -141,7 +207,7 @@ cmp /mnt/ext2/bigfile /tmp/readback.bin && echo "DATA MATCH ✓"
 stat /mnt/ext2/bigfile
 ```
 
-### 第七步：持久化验证
+### 第八步：持久化验证
 
 ```bash
 # 卸载
@@ -156,7 +222,7 @@ ls -la /mnt/ext2
 cat /mnt/ext2/bigfile | wc -c    # 应显示 1536
 ```
 
-### 第八步：查看内核日志 & 清理
+### 第九步：查看内核日志 & 清理
 
 ```bash
 # 查看模块运行日志
@@ -173,6 +239,8 @@ sudo losetup -d $LOOP
 | 功能 | 命令 | 状态 |
 |------|------|:---:|
 | 挂载（自动格式化） | `mount -t ext2sim` | ✅ |
+| 用户登录 & 注册 | `ext2sim_login` | ✅ |
+| 多用户权限隔离 | — | ✅ |
 | 列出目录 | `ls` | ✅ |
 | 创建文件 | `touch` | ✅ |
 | 写入文件 | `echo > file` | ✅ |
@@ -237,6 +305,7 @@ ubuntu/
 │   ├── file.c                  # 文件操作 → read, write, readdir
 │   ├── balloc.c                # 位图管理 → balloc / bfree / ialloc / ifree
 │   └── dir.c                   # 目录项辅助 → find_entry / add_entry / remove_entry
+├── ext2sim_login.c             # 用户态登录程序（多用户认证）
 ├── Makefile                    # Kbuild（内核模块构建系统）
 └── README.md                   # 本文件
 ```

@@ -29,6 +29,17 @@ struct fs_context;  /* 前置声明（避免循环依赖） */
 #define EXT2_SIM_TOTAL_INODES            4096
 #define EXT2_SIM_ROOT_INO                1     /* 根目录 inode 号 */
 
+/* ── 用户数据库区域 ────────────────────────────────────────── */
+
+#define EXT2_SIM_USER_AREA_BLOCKS       10    /* 用户区域块数              */
+#define EXT2_SIM_USER_AREA_START_REL   (EXT2_SIM_DATA_BLOCK_COUNTS - EXT2_SIM_USER_AREA_BLOCKS)
+                                              /* 用户区域起始相对块号      */
+#define EXT2_SIM_USER_AREA_START_ABS   (EXT2_SIM_DATA_BLOCK_START + EXT2_SIM_USER_AREA_START_REL)
+                                              /* 用户区域起始绝对块号      */
+#define EXT2_SIM_USER_ACCOUNT_SIZE      128   /* 每条用户记录字节数       */
+#define EXT2_SIM_USER_HEADER_BLOCK      0     /* 用户区第 0 块: 头部     */
+#define EXT2_SIM_USER_DATA_START        1     /* 用户区第 1 块起: 记录   */
+
 /* ── 各区域绝对块号 ──────────────────────────────────────── */
 
 #define EXT2_SIM_SB_BLOCK            0

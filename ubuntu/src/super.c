@@ -99,7 +99,8 @@ static int ext2_sim_format_disk(struct super_block *sb)
     sb_disk->s_disk_size         = cpu_to_le16(EXT2_SIM_TOTAL_BLOCKS);
     sb_disk->s_blocks_per_group  = cpu_to_le16(EXT2_SIM_TOTAL_BLOCKS);
     sb_disk->s_size_per_block    = cpu_to_le16(EXT2_SIM_BLOCK_SIZE);
-    sb_disk->s_free_blocks_count = cpu_to_le16(EXT2_SIM_DATA_BLOCK_COUNTS - 1);
+    sb_disk->s_free_blocks_count = cpu_to_le16(EXT2_SIM_DATA_BLOCK_COUNTS - 1
+                                                - EXT2_SIM_USER_AREA_BLOCKS);
     sb_disk->s_free_inodes_count = cpu_to_le16(EXT2_SIM_TOTAL_INODES - 1);
     mark_buffer_dirty(bh);
     brelse(bh);
@@ -114,18 +115,28 @@ static int ext2_sim_format_disk(struct super_block *sb)
     gd->bg_block_bitmap      = cpu_to_le16(EXT2_SIM_BLOCK_BMP_BLOCK);
     gd->bg_inode_bitmap      = cpu_to_le16(EXT2_SIM_INODE_BMP_BLOCK);
     gd->bg_inode_table       = cpu_to_le16(EXT2_SIM_INODE_TABLE_START);
-    gd->bg_free_blocks_count = cpu_to_le16(EXT2_SIM_DATA_BLOCK_COUNTS - 1);
+    gd->bg_free_blocks_count = cpu_to_le16(EXT2_SIM_DATA_BLOCK_COUNTS - 1
+                                         - EXT2_SIM_USER_AREA_BLOCKS);
     gd->bg_free_inodes_count = cpu_to_le16(EXT2_SIM_TOTAL_INODES - 1);
     gd->bg_used_dirs_count   = cpu_to_le16(1);
     mark_buffer_dirty(bh);
     brelse(bh);
 
-    /* 3. 初始化块位图 (块 2) — bit 0 = 1（根目录数据块已占用） */
+    /* 3. 初始化块位图 (块 2)
+     *    bit 0 = 1（根目录数据块已占用）
+     *    用户数据库区域（相对块 4086~4095）也标记为已占用
+     */
     bh = sb_bread(sb, EXT2_SIM_BLOCK_BMP_BLOCK);
     if (!bh)
         return -EIO;
     memset(bh->b_data, 0, EXT2_SIM_BLOCK_SIZE);
     bh->b_data[0] = 0x80;  /* bit 0 = 1 */
+    /* 标记 10 个用户数据库块 */
+    for (i = EXT2_SIM_USER_AREA_START_REL; i < EXT2_SIM_DATA_BLOCK_COUNTS; i++) {
+        int byte = i / 8;
+        int bit  = i % 8;
+        bh->b_data[byte] |= (unsigned char)(128 >> bit);
+    }
     mark_buffer_dirty(bh);
     brelse(bh);
 
@@ -186,6 +197,43 @@ static int ext2_sim_format_disk(struct super_block *sb)
 
     mark_buffer_dirty(bh);
     brelse(bh);
+
+    /* 7. 初始化用户数据库（绝对块 4602~4611，相对块 4086~4095）
+     *    与 Windows_macOS 版本完全兼容：
+     *      块 4602 (用户区 0): 头部 [user_count(2B LE) | padding]
+     *      块 4603 (用户区 1): root 用户记录 (username="root", password="root", uid=0)
+     */
+    {
+        struct ext2_sim_user_account_disk *uacct;
+        unsigned char *user_hdr;
+
+        /* 用户数据库头部块 */
+        bh = sb_bread(sb, EXT2_SIM_USER_AREA_START_ABS);
+        if (!bh)
+            return -EIO;
+        memset(bh->b_data, 0, EXT2_SIM_BLOCK_SIZE);
+        user_hdr = (unsigned char *)bh->b_data;
+        user_hdr[0] = 1;   /* user_count = 1 (root) */
+        user_hdr[1] = 0;
+        mark_buffer_dirty(bh);
+        brelse(bh);
+
+        /* 第一条用户记录块 */
+        bh = sb_bread(sb, EXT2_SIM_USER_AREA_START_ABS + EXT2_SIM_USER_DATA_START);
+        if (!bh)
+            return -EIO;
+        memset(bh->b_data, 0, EXT2_SIM_BLOCK_SIZE);
+        uacct = (struct ext2_sim_user_account_disk *)bh->b_data;
+        memcpy(uacct->username, "root", 5);
+        memcpy(uacct->password, "root", 5);
+        uacct->uid  = cpu_to_le16(0);
+        uacct->gid  = cpu_to_le16(0);
+        uacct->home[0] = '/';
+        mark_buffer_dirty(bh);
+        brelse(bh);
+
+        printk(KERN_INFO "ext2sim: user database initialized (root/root)\n");
+    }
 
     /* 强制同步所有写入，确保 remount 时数据已持久化 */
     sync_blockdev(sb->s_bdev);

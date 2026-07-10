@@ -91,4 +91,28 @@ struct ext2_sim_dir_entry_disk {
  * 空条目的 inode 字段为 0。
  */
 
+/* ── 用户账户 (128 bytes, 用户数据库每条) ──────────────────────── */
+
+#define EXT2_SIM_MAX_USERS      32
+#define EXT2_SIM_USERNAME_LEN   32
+#define EXT2_SIM_PASSWORD_LEN   32
+
+struct ext2_sim_user_account_disk {
+    __u8     username[32];            /* 用户名                      */
+    __u8     password[32];            /* 密码 (明文)                 */
+    __le16   uid;                     /* 用户 ID                     */
+    __le16   gid;                     /* 组 ID                       */
+    __u8     home[60];                /* 主目录路径                  */
+};
+
+/*
+ * 用户数据库布局（位于数据区末尾 10 块，与 Windows_macOS 版本兼容）：
+ *   相对块 4086：头部 [user_count(2B, LE) | padding(510B)]
+ *   相对块 4087~4094：32 条用户记录 × 128B (4 条/块)
+ *   相对块 4095：预留
+ *
+ * 绝对块号：4602 ~ 4611
+ * 字节偏移：2356224 ~ 2361343
+ */
+
 #endif /* _EXT2_SIM_DISK_H */
